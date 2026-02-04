@@ -18,11 +18,16 @@
 
 ### 安装
 
+**环境要求：** SynthCity 依赖链需要 **PyTorch >= 2.10**（opacus 使用 `torch.nn.RMSNorm`）。若报错 `AttributeError: module 'torch.nn' has no attribute 'RMSNorm'`，请先升级 PyTorch。
+
 ```bash
-# 安装依赖（SynthCity）
+# 1. 升级 PyTorch（若当前版本 < 2.10）
+pip install "torch>=2.10"
+
+# 2. 安装 SynthCity
 pip install synthcity
 
-# 安装项目（可编辑模式）
+# 3. 安装项目（可编辑模式）
 pip install -e .
 ```
 
