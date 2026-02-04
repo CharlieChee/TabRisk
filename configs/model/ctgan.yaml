@@ -1,14 +1,13 @@
 # CTGAN 模型配置
-_model_:
-  target: synthgen.models.sdv_ctgan.SDVCTGANModel
-  params:
-    epochs: ${train.epochs}
-    batch_size: ${train.batch_size}
-    verbose: ${train.verbose}
-    # CTGAN 特定参数
-    generator_dim: [256, 256]
-    discriminator_dim: [256, 256]
-    generator_lr: 2e-4
-    discriminator_lr: 2e-4
-    generator_decay: 1e-6
-    discriminator_decay: 1e-6
+_target_: synthgen.models.sdv_ctgan.SDVCTGANModel
+params:
+  epochs: ${train.epochs}
+  batch_size: ${train.batch_size}
+  verbose: ${train.verbose}
+  # CTGAN 特定参数
+  generator_dim: [256, 256]
+  discriminator_dim: [256, 256]
+  generator_lr: 2e-4
+  discriminator_lr: 2e-4
+  generator_decay: 1e-6
+  discriminator_decay: 1e-6
