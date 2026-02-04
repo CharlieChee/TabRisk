@@ -33,9 +33,9 @@ ENV/
 *.swo
 *~
 
-# Data and outputs
-data/
-outputs/
+# Data and outputs（仅忽略项目根目录的 data/ 和 outputs/，不忽略 src/synthgen/data/ 代码包）
+/data/
+/outputs/
 *.csv
 *.parquet
 
