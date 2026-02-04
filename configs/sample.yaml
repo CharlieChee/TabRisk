@@ -1,0 +1,8 @@
+defaults:
+  - _self_
+
+# 采样配置
+model_path: outputs/latest/model.pkl
+schema_path: outputs/latest/schema.json
+num_rows: 1000
+output_path: outputs/synthetic.csv

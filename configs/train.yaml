@@ -1,0 +1,13 @@
+defaults:
+  - model: ctgan
+  - data: demo
+  - _self_
+
+# 训练配置
+seed: 42
+output_dir: outputs/train_${now:%Y%m%d_%H%M%S}
+
+# 训练参数
+epochs: 300
+batch_size: 500
+verbose: true
