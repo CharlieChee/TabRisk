@@ -2,9 +2,6 @@
 requires = ["setuptools>=61.0", "wheel"]
 build-backend = "setuptools.build_meta"
 
-[tool.setuptools.packages.find]
-where = ["src"]
-
 [project]
 name = "synthgen"
 version = "0.1.0"
@@ -29,6 +26,10 @@ dev = [
     "black>=23.0.0",
     "ruff>=0.1.0",
 ]
+
+[tool.setuptools]
+# 显式列出包及子包，避免 synthgen.data / synthgen.models 未被安装
+packages = ["synthgen", "synthgen.data", "synthgen.models"]
 
 [tool.setuptools.package-dir]
 "" = "src"
