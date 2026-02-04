@@ -15,6 +15,11 @@ from synthgen.data.load import load_csv
 from synthgen.data.schema import infer_schema
 from synthgen.models.base import BaseModel
 
+# 获取项目根目录（configs/ 在项目根目录）
+# 当使用 python -m synthgen.train 时，工作目录是项目根目录
+PROJECT_ROOT = Path(__file__).parent.parent.parent.resolve()
+CONFIG_DIR = PROJECT_ROOT / "configs"
+
 
 def setup_logging(output_dir: Path) -> None:
     """设置日志。"""
@@ -60,14 +65,20 @@ def instantiate_model(cfg: DictConfig) -> BaseModel:
     return model_class(**params)
 
 
-def instantiate_data_loader(cfg: DictConfig) -> pd.DataFrame:
+def instantiate_data_loader(cfg: DictConfig, project_root: Path) -> pd.DataFrame:
     """实例化数据加载器并加载数据。"""
     data_cfg = cfg.data
     if "_target_" not in data_cfg:
         raise ValueError("数据配置中缺少 _target_ 字段")
 
     target = data_cfg._target_
-    params = data_cfg.get("params", {})
+    params = data_cfg.get("params", {}).copy()
+
+    # 处理文件路径（如果是相对路径，则相对于项目根目录）
+    if "file_path" in params:
+        file_path = Path(params["file_path"])
+        if not file_path.is_absolute():
+            params["file_path"] = str(project_root / file_path)
 
     # 动态导入并调用
     module_path, func_name = target.rsplit(".", 1)
@@ -78,13 +89,23 @@ def instantiate_data_loader(cfg: DictConfig) -> pd.DataFrame:
     return load_func(**params)
 
 
-@hydra.main(version_base=None, config_path="../../configs", config_name="train")
+@hydra.main(version_base=None, config_path=str(CONFIG_DIR), config_name="train")
 def main(cfg: DictConfig) -> None:
     """训练主函数。"""
     console = Console()
 
-    # 创建输出目录
-    output_dir = Path(cfg.output_dir)
+    # 支持简写参数：data.path -> data.params.file_path
+    if OmegaConf.is_config(cfg.get("data")) and "path" in cfg.data:
+        if "params" not in cfg.data:
+            OmegaConf.set(cfg.data, "params", {})
+        OmegaConf.set(cfg.data.params, "file_path", cfg.data.pop("path"))
+        logger.info(f"检测到简写参数 data.path，已映射到 data.params.file_path")
+
+    # 获取项目根目录（Hydra 会改变工作目录，所以需要绝对路径）
+    project_root = PROJECT_ROOT.resolve()
+    
+    # 创建输出目录（相对于项目根目录）
+    output_dir = project_root / cfg.output_dir
     output_dir.mkdir(parents=True, exist_ok=True)
 
     # 设置日志
@@ -100,7 +121,7 @@ def main(cfg: DictConfig) -> None:
     logger.info("=" * 60)
     logger.info("步骤 1: 加载数据")
     logger.info("=" * 60)
-    df = instantiate_data_loader(cfg)
+    df = instantiate_data_loader(cfg, project_root)
     logger.info(f"数据形状: {df.shape}")
 
     # 推断 schema
@@ -154,7 +175,7 @@ def main(cfg: DictConfig) -> None:
     logger.info(f"运行配置已保存到: {run_config_path}")
 
     # 创建 latest 符号链接（用于 sample.py 快速访问）
-    latest_dir = Path("outputs/latest")
+    latest_dir = project_root / "outputs" / "latest"
     latest_dir.parent.mkdir(parents=True, exist_ok=True)
     if latest_dir.exists() or latest_dir.is_symlink():
         latest_dir.unlink()
