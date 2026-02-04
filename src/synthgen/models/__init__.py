@@ -1,11 +1,10 @@
-"""Model interfaces and implementations."""
+"""Model interfaces and implementations（仅使用 SynthCity 后端）。"""
 
 import pickle
 from pathlib import Path
 from typing import Union
 
 from synthgen.models.base import BaseModel as BaseGeneratorModel
-from synthgen.models.sdv_ctgan import SDVCTGANModel
 from synthgen.models.synthcity_models import (
     SynthCityCTGANModel,
     SynthCityTVAEModel,
@@ -17,8 +16,7 @@ from synthgen.synthetic_backend import SYNTHCITY_GENERATORS
 
 def load_model(file_path: str) -> Union[BaseGeneratorModel]:
     """
-    根据保存文件内容自动选择加载方式：SynthCity (ctgan/tvae/pategan) 或旧版 SDV CTGAN。
-    保证随机种子与数据划分方式与原实验一致（由训练时保存的配置决定）。
+    根据保存文件中的 backend_name 加载 SynthCity 模型（ctgan / tvae / pategan）。
     """
     path = Path(file_path)
     if not path.exists():
@@ -28,13 +26,13 @@ def load_model(file_path: str) -> Union[BaseGeneratorModel]:
     backend_name = d.get("backend_name")
     if backend_name in SYNTHCITY_GENERATORS:
         return load_synthcity_model(str(path))
-    # 兼容旧版 SDV CTGAN 模型
-    return SDVCTGANModel.load(str(path))
+    raise ValueError(
+        f"不支持的模型类型: {backend_name}。本项目仅使用 SynthCity 后端（ctgan / tvae / pategan）。"
+    )
 
 
 __all__ = [
     "BaseGeneratorModel",
-    "SDVCTGANModel",
     "SynthCityCTGANModel",
     "SynthCityTVAEModel",
     "SynthCityPATEGANModel",

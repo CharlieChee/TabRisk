@@ -105,8 +105,7 @@ TabRisk/
 │       ├── models/      # 模型接口和实现
 │       │   ├── __init__.py
 │       │   ├── base.py
-│       │   ├── synthcity_models.py  # CTGAN / TVAE / PATEGAN（基于 SynthCity）
-│       │   └── sdv_ctgan.py         # 旧版 SDV（兼容加载）
+│       │   └── synthcity_models.py  # CTGAN / TVAE / PATEGAN（基于 SynthCity）
 │       ├── train.py     # 训练入口
 │       └── sample.py    # 采样入口
 ├── scripts/
