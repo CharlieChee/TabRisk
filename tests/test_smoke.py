@@ -13,6 +13,7 @@ import shutil
 from synthgen.data.load import load_csv
 from synthgen.data.schema import infer_schema, Schema
 from synthgen.models import SynthCityCTGANModel, load_model
+from synthgen.synthetic_backend import create_plugin
 
 
 @pytest.fixture
@@ -52,6 +53,18 @@ def temp_dir():
     temp_path = Path(tempfile.mkdtemp())
     yield temp_path
     shutil.rmtree(temp_path)
+
+
+def test_create_ctgan_plugin_with_verbose():
+    """创建 ctgan plugin 时传入 verbose 不应触发 TypeError。"""
+    plugin = create_plugin(
+        "ctgan",
+        random_state=42,
+        n_iter=2,
+        batch_size=32,
+        verbose=True,  # 当前 SynthCity 不支持，应被过滤
+    )
+    assert plugin is not None
 
 
 def test_data_loading(demo_data, temp_dir):

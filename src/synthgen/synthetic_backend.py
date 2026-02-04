@@ -11,12 +11,43 @@ Supported generators: CTGAN, TVAE, PATEGAN.
 
 from __future__ import annotations
 
+import inspect
 from typing import Any, Dict, Optional
 
 from loguru import logger
 
 # Supported SynthCity generator names (used in config and load/save)
 SYNTHCITY_GENERATORS = ("ctgan", "tvae", "pategan")
+
+# 已知不兼容 SynthCity Plugin.__init__ 的参数（可随版本扩展）
+_KNOWN_UNSUPPORTED = frozenset({"verbose"})
+
+
+def _filter_plugin_params(name: str, params: Dict[str, Any], plugins: Any) -> Dict[str, Any]:
+    """
+    过滤 params，只保留插件构造函数支持的参数。
+    至少移除 _KNOWN_UNSUPPORTED 中的键；
+    若可获取插件类，则用 inspect.signature 进一步过滤。
+    """
+    filtered = {k: v for k, v in params.items() if k not in _KNOWN_UNSUPPORTED}
+    try:
+        plugin_cls = None
+        if hasattr(plugins, "plugins") and isinstance(getattr(plugins, "plugins"), dict):
+            plugin_cls = plugins.plugins.get(name)
+        elif hasattr(plugins, "_plugins") and isinstance(getattr(plugins, "_plugins"), dict):
+            plugin_cls = plugins._plugins.get(name)
+        if plugin_cls is not None and isinstance(plugin_cls, type):
+            sig = inspect.signature(plugin_cls.__init__)
+            allowed = {
+                p for p in sig.parameters
+                if p not in ("self", "args", "kwargs")
+                and sig.parameters[p].kind
+                not in (inspect.Parameter.VAR_KEYWORD, inspect.Parameter.VAR_POSITIONAL)
+            }
+            filtered = {k: v for k, v in filtered.items() if k in allowed}
+    except Exception:
+        pass
+    return filtered
 
 
 def create_plugin(
@@ -60,6 +91,8 @@ def create_plugin(
 
     # 统一传入 random_state 以保证可复现
     params: Dict[str, Any] = {"random_state": random_state, **kwargs}
-    plugin = Plugins().get(name, **params)
+    plugins = Plugins()
+    params = _filter_plugin_params(name, params, plugins)
+    plugin = plugins.get(name, **params)
     logger.debug(f"已创建 SynthCity 插件: {name}, random_state={random_state}")
     return plugin

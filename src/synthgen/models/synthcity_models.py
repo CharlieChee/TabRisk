@@ -67,10 +67,10 @@ class _SynthCityModelBase(BaseModel):
         self.schema: Optional[Schema] = None
 
     def _plugin_params(self) -> Dict[str, Any]:
+        # 不传 verbose：SynthCity Plugin.__init__ 不接受该参数
         return {
             "n_iter": self.n_iter,
             "batch_size": self.batch_size,
-            "verbose": self.verbose,
             **self.extra_kwargs,
         }
 
