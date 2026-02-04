@@ -23,9 +23,23 @@ pip install sdv
 pip install -e .
 ```
 
-### 准备数据
+### 生成演示数据
 
-将你的 CSV 文件放在 `data/` 目录下（该目录会被 gitignore）。
+```bash
+# 生成包含混合类型的演示数据（默认 1000 行，输出到 data/demo.csv）
+python scripts/make_demo_data.py
+
+# 自定义参数
+python scripts/make_demo_data.py --rows 500 --output data/my_demo.csv
+```
+
+演示数据包含以下列：
+- `age`: 连续数值（18-80）
+- `income`: 连续数值（收入）
+- `education`: 分类（小学/初中/高中/本科/硕士/博士）
+- `gender`: 分类（男/女）
+- `country`: 分类（国家）
+- `target`: 二元分类（True/False）
 
 ### 训练模型
 
@@ -33,7 +47,7 @@ pip install -e .
 python -m synthgen.train
 ```
 
-默认配置会使用 `configs/data/demo.yaml` 中指定的数据文件。
+默认配置会使用 `configs/data/demo.yaml` 中指定的数据文件（`data/demo.csv`）。
 
 ### 生成合成数据
 
@@ -43,8 +57,10 @@ python -m synthgen.sample
 
 ### 运行 Smoke Test
 
+Smoke test 会自动完成完整流程：生成演示数据 → 训练模型 → 生成合成数据
+
 ```bash
-# 使用脚本
+# 使用脚本（推荐）
 bash scripts/smoke_test.sh
 
 # 或使用 pytest
@@ -76,7 +92,8 @@ TabRisk/
 │       ├── train.py     # 训练入口
 │       └── sample.py    # 采样入口
 ├── scripts/
-│   └── smoke_test.sh   # Smoke test 脚本
+│   ├── make_demo_data.py  # 生成演示数据脚本
+│   └── smoke_test.sh      # Smoke test 脚本
 ├── tests/
 │   └── test_smoke.py   # Smoke test 测试
 ├── data/               # 数据目录（gitignore）

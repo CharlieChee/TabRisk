@@ -14,16 +14,29 @@ from synthgen.models.sdv_ctgan import SDVCTGANModel
 
 @pytest.fixture
 def demo_data():
-    """创建演示数据。"""
+    """创建演示数据（与 make_demo_data.py 一致）。"""
     np.random.seed(42)
     n_rows = 500
 
+    # 与 make_demo_data.py 保持一致的数据结构
+    age = np.random.randint(18, 81, n_rows)
+    income = np.random.normal(50000, 20000, n_rows)
+    income = np.clip(income, 0, 200000)
+    education_levels = ["小学", "初中", "高中", "本科", "硕士", "博士"]
+    education = np.random.choice(education_levels, n_rows, p=[0.1, 0.15, 0.25, 0.3, 0.15, 0.05])
+    gender = np.random.choice(["男", "女"], n_rows, p=[0.52, 0.48])
+    countries = ["中国", "美国", "日本", "德国", "法国", "英国", "其他"]
+    country = np.random.choice(countries, n_rows, p=[0.4, 0.2, 0.1, 0.1, 0.05, 0.05, 0.1])
+    target_probs = 1 / (1 + np.exp(-(income / 10000 - 3 + (pd.Categorical(education).codes / 2))))
+    target = np.random.binomial(1, target_probs, n_rows).astype(bool)
+
     data = {
-        "age": np.random.randint(18, 80, n_rows),
-        "income": np.random.normal(50000, 15000, n_rows),
-        "city": np.random.choice(["北京", "上海", "广州", "深圳"], n_rows),
-        "is_active": np.random.choice([True, False], n_rows),
-        "score": np.random.uniform(0, 100, n_rows),
+        "age": age,
+        "income": income.round(2),
+        "education": education,
+        "gender": gender,
+        "country": country,
+        "target": target,
     }
 
     df = pd.DataFrame(data)
@@ -60,7 +73,8 @@ def test_schema_inference(demo_data):
     assert len(schema.continuous_columns) > 0
 
     # 验证列类型
-    assert "city" in schema.categorical_columns
+    assert "education" in schema.categorical_columns
+    assert "gender" in schema.categorical_columns
     assert "income" in schema.continuous_columns or "income" in schema.categorical_columns
 
 
