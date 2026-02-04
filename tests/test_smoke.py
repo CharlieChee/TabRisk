@@ -55,6 +55,19 @@ def temp_dir():
     shutil.rmtree(temp_path)
 
 
+def test_onehotencoder_compat():
+    """OneHotEncoder(sparse=...) 在 sklearn>=1.2 下应通过 compat 层正常创建。"""
+    pytest.importorskip("sklearn")
+    from synthgen.compat.sklearn import apply_sklearn_compat
+
+    apply_sklearn_compat()
+    import sklearn.preprocessing
+
+    # 模拟 synthcity 旧 API：OneHotEncoder(sparse=True)
+    enc = sklearn.preprocessing.OneHotEncoder(sparse=True)
+    assert enc is not None
+
+
 def test_create_ctgan_plugin_with_verbose():
     """创建 ctgan plugin 时传入 verbose 不应触发 TypeError。"""
     plugin = create_plugin(

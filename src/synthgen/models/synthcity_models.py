@@ -67,7 +67,8 @@ class _SynthCityModelBase(BaseModel):
         self.schema: Optional[Schema] = None
 
     def _plugin_params(self) -> Dict[str, Any]:
-        # 不传 verbose：SynthCity Plugin.__init__ 不接受该参数
+        # 所有参数经 create_plugin -> compat.synthcity.filter_plugin_params 显式过滤后传入
+        # 不在此直接传 verbose 等已知不兼容参数；extra_kwargs 也会被过滤
         return {
             "n_iter": self.n_iter,
             "batch_size": self.batch_size,
