@@ -27,8 +27,9 @@ pip install -e .
 # 2. 自检环境（推荐）
 python scripts/check_env.py
 
-# 3. 若自检失败，按提示安装约束版本，例如：
-#    pip install 'torch>=2.0,<2.1' 'opacus>=1.3,<1.5'
+# 3. 若自检失败，按提示安装约束版本，或以 lock 为准复现环境，例如：
+#    pip install -r requirements.lock.txt
+#    pip install 'torch==2.0.1' 'opacus==1.4.1'
 ```
 
 ### 生成演示数据
@@ -126,12 +127,21 @@ TabRisk/
 └── README.md
 ```
 
+## Environment / Dependency
+
+- **真实运行环境以 `environment.lock.yml` + `requirements.lock.txt` 为准**  
+  上述两个文件由服务器真实运行环境导出，为权威依赖快照。复现可运行环境时请以 lock 文件为准（例如使用 conda 根据 `environment.lock.yml` 创建环境，或使用 `requirements.lock.txt` 安装 pip 依赖）。
+
+- **本地 Cursor 环境仅用于编辑，不保证可运行**  
+  在 Cursor/IDE 中的本地环境仅用于代码编辑与阅读，未要求与 lock 完全一致，不保证能成功运行训练或脚本；需可运行时请在基于 lock 文件构建的环境中操作。
+
 ## Dependency Compatibility Notes
 
-- **已测试的版本组合（推荐）**  
-  - `torch>=2.0,<2.1`（如 2.0.1）  
-  - `opacus>=1.3,<1.5`（如 1.4.0）  
-  - `synthcity>=0.2.0,<0.3.0`（当前稳定）
+- **已测试的版本组合（与 lock 一致，推荐）**  
+  - `torch==2.0.1`  
+  - `opacus==1.4.1`  
+  - `pydantic>=1.10,<2`（如 1.10.26）  
+  - `synthcity>=0.2.0,<0.3.0`（如 0.2.4）
 
 - **为什么需要这些约束**  
   SynthCity 会间接导入 **opacus**（差分隐私库）。opacus **1.5+** 中新增了 `opacus.grad_sample.rms_norm`，依赖 **`torch.nn.RMSNorm`**，而该 API 仅在 **PyTorch 2.10+** 中存在。在未升级 PyTorch 的情况下使用 opacus 1.5+ 会触发：  
