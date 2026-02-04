@@ -35,7 +35,7 @@ dev = [
 
 [tool.setuptools]
 # 显式列出包及子包，避免 synthgen.data / synthgen.models 未被安装
-packages = ["synthgen", "synthgen.compat", "synthgen.data", "synthgen.models"]
+packages = ["synthgen", "synthgen.compat", "synthgen.data", "synthgen.models", "synthgen.utils"]
 
 [tool.setuptools.package-dir]
 "" = "src"

@@ -19,6 +19,7 @@ from loguru import logger
 from synthgen.data.schema import Schema
 from synthgen.models.base import BaseModel
 from synthgen.synthetic_backend import SYNTHCITY_GENERATORS, create_plugin
+from synthgen.utils.conversion import to_dataframe
 
 
 class _SynthCityModelBase(BaseModel):
@@ -70,11 +71,16 @@ class _SynthCityModelBase(BaseModel):
             raise ValueError("模型尚未训练，请先调用 fit()")
         logger.info(f"生成 {num_rows} 行合成数据 (SynthCity {self.BACKEND_NAME})...")
         out = self._plugin.generate(count=num_rows)
-        # SynthCity 可能返回 numpy 或 DataFrame，统一为 DataFrame
-        if not isinstance(out, pd.DataFrame):
-            out = pd.DataFrame(out)
-        logger.info(f"生成完成，形状: {out.shape}")
-        return out
+        df = to_dataframe(out)
+        # 列名与训练 schema 对齐
+        if self.schema is not None:
+            expected_cols = [c.name for c in self.schema.columns]
+            if set(expected_cols) <= set(df.columns):
+                df = df[expected_cols]
+            elif len(expected_cols) == len(df.columns):
+                df.columns = expected_cols
+        logger.info(f"生成完成，形状: {df.shape}")
+        return df
 
     def save(self, file_path: str) -> None:
         """已弃用：SynthCity plugin 不可 pickle。请使用 save_metadata。"""

@@ -14,6 +14,7 @@ from synthgen.data.load import load_csv
 from synthgen.data.schema import infer_schema, Schema
 from synthgen.models import SynthCityCTGANModel
 from synthgen.synthetic_backend import create_plugin
+from synthgen.utils.conversion import to_dataframe
 
 
 @pytest.fixture
@@ -53,6 +54,45 @@ def temp_dir():
     temp_path = Path(tempfile.mkdtemp())
     yield temp_path
     shutil.rmtree(temp_path)
+
+
+def test_to_dataframe_conversion():
+    """to_dataframe 能稳定处理多种输入类型。"""
+    # 已是 DataFrame
+    df_in = pd.DataFrame({"a": [1, 2], "b": [3, 4]})
+    out = to_dataframe(df_in)
+    assert isinstance(out, pd.DataFrame)
+    assert list(out.columns) == ["a", "b"]
+
+    # 带 .dataframe() 的对象（模拟 synthcity 返回）
+    class MockWithDataframe:
+        def dataframe(self):
+            return pd.DataFrame({"x": [1], "y": [2]})
+
+    out = to_dataframe(MockWithDataframe())
+    assert isinstance(out, pd.DataFrame)
+    assert list(out.columns) == ["x", "y"]
+
+    # numpy array
+    arr = np.array([[1, 2], [3, 4]])
+    out = to_dataframe(arr)
+    assert isinstance(out, pd.DataFrame)
+    assert out.shape == (2, 2)
+
+    # 带 .to_pandas() 的对象
+    class MockWithToPandas:
+        def to_pandas(self):
+            return pd.DataFrame({"p": [1], "q": [2]})
+
+    out = to_dataframe(MockWithToPandas())
+    assert isinstance(out, pd.DataFrame)
+    assert list(out.columns) == ["p", "q"]
+
+    # dict
+    d = {"col1": [1, 2], "col2": [3, 4]}
+    out = to_dataframe(d)
+    assert isinstance(out, pd.DataFrame)
+    assert list(out.columns) == ["col1", "col2"]
 
 
 def test_onehotencoder_compat():
