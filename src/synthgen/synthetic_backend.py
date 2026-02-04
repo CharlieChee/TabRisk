@@ -48,8 +48,15 @@ def create_plugin(
         from synthcity.plugins import Plugins
     except ImportError as e:
         raise ImportError(
-            "未安装 SynthCity。请运行: pip install synthcity"
+            "未安装 SynthCity。请运行: pip install -e . 或 pip install -r requirements.txt"
         ) from e
+    except AttributeError as e:
+        if "RMSNorm" in str(e) or "rms_norm" in str(e).lower():
+            raise ImportError(
+                "opacus 与当前 torch 版本不兼容（nn.RMSNorm）。请运行: python scripts/check_env.py\n"
+                "并按照 README 的 Dependency Compatibility Notes 安装: torch>=2.0,<2.1 与 opacus>=1.3,<1.5"
+            ) from e
+        raise
 
     # 统一传入 random_state 以保证可复现
     params: Dict[str, Any] = {"random_state": random_state, **kwargs}

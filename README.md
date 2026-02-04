@@ -18,17 +18,17 @@
 
 ### 安装
 
-**环境要求：** SynthCity 依赖链需要 **PyTorch >= 2.10**（opacus 使用 `torch.nn.RMSNorm`）。若报错 `AttributeError: module 'torch.nn' has no attribute 'RMSNorm'`，请先升级 PyTorch。
+项目**显式约束**了 `torch` / `opacus` / `synthcity` 版本，以避免 opacus 与 torch 不兼容（`nn.RMSNorm`）导致的 import 崩溃。详见下方 **Dependency Compatibility Notes**。
 
 ```bash
-# 1. 升级 PyTorch（若当前版本 < 2.10）
-pip install "torch>=2.10"
-
-# 2. 安装 SynthCity
-pip install synthcity
-
-# 3. 安装项目（可编辑模式）
+# 1. 安装项目（会按 pyproject.toml / requirements.txt 解析依赖）
 pip install -e .
+
+# 2. 自检环境（推荐）
+python scripts/check_env.py
+
+# 3. 若自检失败，按提示安装约束版本，例如：
+#    pip install 'torch>=2.0,<2.1' 'opacus>=1.3,<1.5'
 ```
 
 ### 生成演示数据
@@ -114,6 +114,7 @@ TabRisk/
 │       ├── train.py     # 训练入口
 │       └── sample.py    # 采样入口
 ├── scripts/
+│   ├── check_env.py       # 环境自检（torch/opacus/synthcity）
 │   ├── make_demo_data.py  # 生成演示数据脚本
 │   └── smoke_test.sh      # Smoke test 脚本
 ├── tests/
@@ -124,6 +125,24 @@ TabRisk/
 ├── pyproject.toml
 └── README.md
 ```
+
+## Dependency Compatibility Notes
+
+- **已测试的版本组合（推荐）**  
+  - `torch>=2.0,<2.1`（如 2.0.1）  
+  - `opacus>=1.3,<1.5`（如 1.4.0）  
+  - `synthcity>=0.2.0,<0.3.0`（当前稳定）
+
+- **为什么需要这些约束**  
+  SynthCity 会间接导入 **opacus**（差分隐私库）。opacus **1.5+** 中新增了 `opacus.grad_sample.rms_norm`，依赖 **`torch.nn.RMSNorm`**，而该 API 仅在 **PyTorch 2.10+** 中存在。在未升级 PyTorch 的情况下使用 opacus 1.5+ 会触发：  
+  `AttributeError: module 'torch.nn' has no attribute 'RMSNorm'`。  
+  **本项目采用**：固定 **torch 2.0.x** + **opacus 1.x（<1.5）**，在不升级 PyTorch 的前提下保证 SynthCity 可正常 import 与运行。
+
+- **不允许未约束的 torch>=... / opacus>=...**  
+  依赖在 `pyproject.toml` 与 `requirements.txt` 中均带上下界，新 clone 后 `pip install -e .` 不应再触发 nn.RMSNorm 报错。
+
+- **自检脚本**  
+  安装后建议运行：`python scripts/check_env.py`，会检查 torch 版本、opacus 版本区间、以及 synthcity 是否可正常导入；若失败会给出可操作的报错信息。
 
 ## 配置说明
 
