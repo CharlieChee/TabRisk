@@ -97,10 +97,11 @@ def main(cfg: DictConfig) -> None:
     """训练主函数。"""
     console = Console()
 
-    # 支持简写参数：data.path -> data.params.file_path
+    # 支持简写参数：data.path -> data.params.file_path（只读 path，不修改 cfg.data 结构）
     if OmegaConf.is_config(cfg.get("data")) and "path" in cfg.data:
-        path_value = cfg.data.pop("path")
-        cfg.data.params = cfg.data.get("params", {})
+        path_value = cfg.data.path  # 只读，避免 struct mode 下 pop 触发 ConfigTypeError
+        if "params" not in cfg.data:
+            OmegaConf.update(cfg.data, {"params": OmegaConf.create({})}, force_add=True)
         cfg.data.params["file_path"] = path_value
         logger.info(f"检测到简写参数 data.path，已映射到 data.params.file_path")
 

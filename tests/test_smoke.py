@@ -1,5 +1,8 @@
 """Smoke test for the synthetic data generation pipeline."""
 
+import os
+import subprocess
+import sys
 import pytest
 import pandas as pd
 import numpy as np
@@ -167,6 +170,32 @@ def test_end_to_end_pipeline(demo_data, temp_dir):
     loaded_synthetic = pd.read_csv(synthetic_path)
     assert len(loaded_synthetic) == 200
     assert set(loaded_synthetic.columns) == set(df.columns)
+
+
+def test_train_with_data_path_override(demo_data, temp_dir):
+    """测试通过 +data.path=... 覆盖数据路径时，struct mode 下不会触发 ConfigTypeError。"""
+    csv_path = temp_dir / "demo.csv"
+    demo_data.to_csv(csv_path, index=False)
+
+    project_root = Path(__file__).parent.parent
+    env = {**os.environ, "PYTHONPATH": str(project_root / "src")}
+    result = subprocess.run(
+        [
+            sys.executable,
+            "-m",
+            "synthgen.train",
+            f"+data.path={csv_path.resolve()}",
+            "epochs=2",
+        ],
+        cwd=project_root,
+        env=env,
+        capture_output=True,
+        text=True,
+        timeout=180,
+    )
+    assert result.returncode == 0, (
+        f"train 失败 (exit={result.returncode})\nstdout:\n{result.stdout}\nstderr:\n{result.stderr}"
+    )
 
 
 if __name__ == "__main__":
