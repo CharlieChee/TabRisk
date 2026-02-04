@@ -165,29 +165,50 @@ def main(cfg: DictConfig) -> None:
     logger.info("=" * 60)
     model.fit(df, schema)
 
-    # 保存模型
+    # 步骤 5: 保存可序列化产物（禁止 pickle plugin，SynthCity 不保证 pickle-safe）
     logger.info("=" * 60)
-    logger.info("步骤 5: 保存模型")
+    logger.info("步骤 5: 保存产物")
     logger.info("=" * 60)
-    model_path = output_dir / "model.pkl"
-    model.save(str(model_path))
 
     # 保存运行配置
-    run_config_path = output_dir / "run_config.yaml"
+    run_config_path = output_dir / "train_config.yaml"
     with open(run_config_path, "w", encoding="utf-8") as f:
         OmegaConf.save(config=cfg, f=f)
-    logger.info(f"运行配置已保存到: {run_config_path}")
+    logger.info(f"训练配置已保存: {run_config_path}")
 
-    # 创建 latest 符号链接（用于 sample.py 快速访问）
+    # 保存随机种子
+    (output_dir / "random_seed.txt").write_text(str(cfg.seed), encoding="utf-8")
+    logger.info(f"随机种子已保存: {output_dir / 'random_seed.txt'}")
+
+    # 按 save_model 模式保存元数据（不 pickle plugin）
+    save_mode = getattr(cfg, "save_model", False) or False
+    if save_mode == "metadata_only":
+        model.save_metadata(str(output_dir))
+        logger.info(f"模型元数据已保存: {output_dir / 'model_metadata.yaml'}")
+
+    # 训练完成后立即生成合成数据（使用内存中的 model，避免依赖 pickle 加载）
+    synthetic_rows = int(getattr(cfg, "synthetic_rows", 0) or 0)
+    if synthetic_rows > 0:
+        synthetic_df = model.sample(synthetic_rows)
+        synthetic_path = output_dir / "synthetic.csv"
+        synthetic_df.to_csv(synthetic_path, index=False)
+        logger.info(f"合成数据已生成: {synthetic_path} ({synthetic_rows} 行)")
+
+    # 创建 latest 符号链接（用于快速访问最新输出）
     latest_dir = project_root / "outputs" / "latest"
     latest_dir.parent.mkdir(parents=True, exist_ok=True)
     if latest_dir.exists() or latest_dir.is_symlink():
         latest_dir.unlink()
     latest_dir.symlink_to(output_dir.absolute())
 
+    # 训练完成标记
+    (output_dir / ".done").write_text("", encoding="utf-8")
+
     console.print(f"[bold green]训练完成！[/bold green]")
-    console.print(f"模型保存在: {model_path}")
-    console.print(f"Schema 保存在: {output_dir / 'schema.json'}")
+    console.print(f"Schema: {output_dir / 'schema.json'}")
+    console.print(f"配置: {run_config_path}")
+    if synthetic_rows > 0:
+        console.print(f"合成数据: {output_dir / 'synthetic.csv'} ({synthetic_rows} 行)")
 
 
 if __name__ == "__main__":

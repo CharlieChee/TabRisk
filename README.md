@@ -9,8 +9,8 @@
 - 📊 自动推断 CSV 数据的 schema（分类/连续变量）
 - 🤖 使用 SynthCity 支持多种生成器：**CTGAN**、**TVAE**、**PATEGAN**
 - 📦 封装 SynthCity 使用逻辑为独立模块（`synthetic_backend.py`），统一 generator 接口
-- 💾 保存模型和元数据，随机种子与数据划分方式与原实验一致
-- 🎲 生成合成数据并导出为 CSV
+- 💾 保存 schema、配置、元数据；训练完成后立即生成合成数据
+- 🎲 合成数据与训练配置、随机种子一并输出
 - ⚙️ 基于 Hydra 的配置管理
 - 🧪 快速 smoke test 验证
 
@@ -71,9 +71,8 @@ python -m synthgen.train model=pategan
 
 ### 生成合成数据
 
-```bash
-python -m synthgen.sample
-```
+合成数据在训练时通过 `synthetic_rows` 生成，输出至 `outputs/<run>/synthetic.csv`。  
+`sample` 命令依赖 model.pkl，而 **SynthCity plugin 不保证 pickle-safe**，本项目默认不序列化生成器对象，研究关注 **synthetic data** 与 **privacy**，而非模型复用。
 
 ### 运行 Smoke Test
 
@@ -154,6 +153,12 @@ TabRisk/
 - **自检脚本**  
   安装后建议运行：`python scripts/check_env.py`，会检查 torch 版本、opacus 版本区间、以及 synthcity 是否可正常导入；若失败会给出可操作的报错信息。
 
+## SynthCity 与模型保存
+
+- **SynthCity plugin 不保证 pickle-safe**：TabularGAN 等在 `__init__` 中定义 closure，无法 pickle。
+- **本项目默认不序列化生成器对象**：不保存 model.pkl，避免 `AttributeError: Can't pickle local object`。
+- **研究关注 synthetic data 与 privacy**：主要产物为合成数据与 schema，而非模型复用。合成数据在训练时通过 `synthetic_rows` 生成。
+
 ## 配置说明
 
 ### 训练配置 (configs/train.yaml)
@@ -162,25 +167,28 @@ TabRisk/
 - `model`: 模型类型和参数
 - `output_dir`: 输出目录
 - `seed`: 随机种子
+- `save_model`: `false`（默认）不保存模型对象；`metadata_only` 只保存 plugin name + params
+- `synthetic_rows`: 训练完成后立即生成的合成数据行数（0=不生成，默认 1000）
 
 ### 采样配置 (configs/sample.yaml)
 
-- `model_path`: 模型文件路径
+- `model_path`: 模型文件路径（本项目默认不生成 model.pkl）
 - `num_rows`: 生成的行数
 - `output_path`: 输出 CSV 路径
 
 ## 输出文件
 
-训练完成后，`outputs/` 目录会包含：
+训练完成后，`outputs/<run>/` 目录会包含：
 
-- `model.pkl`: 保存的模型
 - `schema.json`: 推断的 schema
-- `run_config.yaml`: 运行配置
+- `train_config.yaml`: 运行配置
+- `random_seed.txt`: 随机种子
+- `synthetic.csv`: 合成数据（由 `synthetic_rows` 控制行数）
+- `.done`: 训练完成标记
+- `model_metadata.yaml`: 仅当 `save_model=metadata_only` 时保存（plugin name + params，用于重建参考）
 - `train.log`: 训练日志
 
-采样完成后会生成：
-
-- `synthetic.csv`: 合成的数据文件
+**说明**：SynthCity plugin（TabularGAN 等）含 closure，不可 pickle，本项目默认不保存 model.pkl。
 
 ## 开发
 

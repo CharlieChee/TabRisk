@@ -55,9 +55,16 @@ def main(cfg: DictConfig) -> None:
     if not model_path.is_absolute():
         model_path = project_root / model_path
     if not model_path.exists():
-        raise FileNotFoundError(f"模型文件不存在: {model_path}")
+        synthetic_path = project_root / "outputs" / "latest" / "synthetic.csv"
+        hint = ""
+        if synthetic_path.exists():
+            hint = f"\n训练已生成合成数据: {synthetic_path}，可直接使用。"
+        raise FileNotFoundError(
+            f"模型文件不存在: {model_path}。本项目默认不保存 model.pkl，"
+            f"请在训练时通过 synthetic_rows 生成合成数据。{hint}"
+        )
 
-    # 根据保存文件中的 backend 自动选择 SynthCity 或旧版 SDV 加载方式
+    # SynthCity plugin 不可 pickle 反序列化，load_model 已弃用
     model: BaseModel = load_model(str(model_path))
     logger.info(f"模型加载完成: {model_path}")
 

@@ -12,7 +12,7 @@ import shutil
 
 from synthgen.data.load import load_csv
 from synthgen.data.schema import infer_schema, Schema
-from synthgen.models import SynthCityCTGANModel, load_model
+from synthgen.models import SynthCityCTGANModel
 from synthgen.synthetic_backend import create_plugin
 
 
@@ -137,28 +137,22 @@ def test_model_training_and_sampling(demo_data, temp_dir):
     assert set(synthetic.columns) == set(demo_data.columns)
 
 
-def test_model_save_load(demo_data, temp_dir):
-    """测试模型保存和加载（SynthCity 后端）。"""
+def test_model_save_metadata(demo_data, temp_dir):
+    """测试 save_metadata（不 pickle plugin）。"""
     schema = infer_schema(demo_data)
     model = SynthCityCTGANModel(n_iter=10, batch_size=100, verbose=False, random_state=42)
     model.fit(demo_data, schema)
 
-    # 保存
-    model_path = temp_dir / "model.pkl"
-    model.save(str(model_path))
-    assert model_path.exists()
-
-    # 通过统一 load_model 加载
-    loaded_model = load_model(str(model_path))
-    assert loaded_model._plugin is not None
-
-    # 验证可以采样
-    synthetic = loaded_model.sample(num_rows=50)
-    assert len(synthetic) == 50
+    # 保存元数据（不 pickle plugin）
+    model.save_metadata(str(temp_dir))
+    meta_path = temp_dir / "model_metadata.yaml"
+    assert meta_path.exists()
+    assert "backend_name" in meta_path.read_text()
+    assert "ctgan" in meta_path.read_text()
 
 
 def test_end_to_end_pipeline(demo_data, temp_dir):
-    """端到端测试：完整流程。"""
+    """端到端测试：完整流程（不 pickle plugin，训练时生成合成数据）。"""
     # 1. 保存数据
     csv_path = temp_dir / "demo.csv"
     demo_data.to_csv(csv_path, index=False)
@@ -176,30 +170,23 @@ def test_end_to_end_pipeline(demo_data, temp_dir):
     model = SynthCityCTGANModel(n_iter=10, batch_size=100, verbose=False, random_state=42)
     model.fit(df, schema)
 
-    # 5. 保存模型
-    model_path = temp_dir / "model.pkl"
-    model.save(str(model_path))
-
-    # 6. 通过统一 load_model 加载
-    loaded_model = load_model(str(model_path))
-
-    # 7. 生成合成数据
-    synthetic = loaded_model.sample(num_rows=200)
+    # 5. 训练后直接生成合成数据（不 pickle plugin）
+    synthetic = model.sample(num_rows=200)
     assert len(synthetic) == 200
+    assert set(synthetic.columns) == set(df.columns)
 
-    # 8. 保存合成数据
+    # 6. 保存合成数据
     synthetic_path = temp_dir / "synthetic.csv"
     synthetic.to_csv(synthetic_path, index=False)
     assert synthetic_path.exists()
 
-    # 验证合成数据可以加载
-    loaded_synthetic = pd.read_csv(synthetic_path)
-    assert len(loaded_synthetic) == 200
-    assert set(loaded_synthetic.columns) == set(df.columns)
+    # 7. 保存元数据（可选）
+    model.save_metadata(str(temp_dir))
+    assert (temp_dir / "model_metadata.yaml").exists()
 
 
 def test_train_with_data_path_override(demo_data, temp_dir):
-    """测试通过 +data.path=... 覆盖数据路径时，struct mode 下不会触发 ConfigTypeError。"""
+    """测试通过 +data.path=... 覆盖数据路径时，struct mode 下不会触发 ConfigTypeError，且训练完整跑通。"""
     csv_path = temp_dir / "demo.csv"
     demo_data.to_csv(csv_path, index=False)
 
@@ -212,6 +199,8 @@ def test_train_with_data_path_override(demo_data, temp_dir):
             "synthgen.train",
             f"+data.path={csv_path.resolve()}",
             "epochs=2",
+            "synthetic_rows=100",
+            f"output_dir={(temp_dir / 'train_out').resolve()}",
         ],
         cwd=project_root,
         env=env,
@@ -222,6 +211,12 @@ def test_train_with_data_path_override(demo_data, temp_dir):
     assert result.returncode == 0, (
         f"train 失败 (exit={result.returncode})\nstdout:\n{result.stdout}\nstderr:\n{result.stderr}"
     )
+    out_dir = temp_dir / "train_out"
+    assert (out_dir / "schema.json").exists()
+    assert (out_dir / "train_config.yaml").exists()
+    assert (out_dir / "random_seed.txt").exists()
+    assert (out_dir / ".done").exists()
+    assert (out_dir / "synthetic.csv").exists()
 
 
 if __name__ == "__main__":

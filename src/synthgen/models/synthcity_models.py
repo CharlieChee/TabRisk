@@ -2,12 +2,14 @@
 SynthCity-based model implementations (CTGAN, TVAE, PATEGAN).
 
 These models implement BaseModel and delegate generation to the SynthCity
-backend, keeping the same fit/sample/save/load interface and schema usage.
+backend, keeping the same fit/sample interface and schema usage.
+
+注意：SynthCity plugin（TabularGAN 等）含 closure，不可 pickle。
+本项目默认不序列化生成器对象，仅保存 schema / 配置 / 元数据。
 """
 
 from __future__ import annotations
 
-import pickle
 from pathlib import Path
 from typing import Any, Dict, Optional
 
@@ -17,30 +19,6 @@ from loguru import logger
 from synthgen.data.schema import Schema
 from synthgen.models.base import BaseModel
 from synthgen.synthetic_backend import SYNTHCITY_GENERATORS, create_plugin
-
-
-def _save_dict(
-    plugin: Any,
-    schema: Optional[Schema],
-    backend_name: str,
-    config: Dict[str, Any],
-) -> Dict[str, Any]:
-    """构建保存用的字典，包含 backend_name 以便 load_model 识别。"""
-    return {
-        "backend_name": backend_name,
-        "plugin": plugin,
-        "schema": schema,
-        "config": config,
-    }
-
-
-def _load_common(file_path: str) -> Dict[str, Any]:
-    """加载 pickle 并返回字典。"""
-    path = Path(file_path)
-    if not path.exists():
-        raise FileNotFoundError(f"模型文件不存在: {file_path}")
-    with open(path, "rb") as f:
-        return pickle.load(f)
 
 
 class _SynthCityModelBase(BaseModel):
@@ -99,38 +77,39 @@ class _SynthCityModelBase(BaseModel):
         return out
 
     def save(self, file_path: str) -> None:
-        if self._plugin is None:
-            raise ValueError("模型尚未训练，无法保存")
-        path = Path(file_path)
-        path.parent.mkdir(parents=True, exist_ok=True)
+        """已弃用：SynthCity plugin 不可 pickle。请使用 save_metadata。"""
+        raise NotImplementedError(
+            "SynthCity plugin 含 closure，不可 pickle。"
+            "请使用 save_metadata(output_dir) 保存元数据，或于训练时通过 synthetic_rows 生成数据。"
+        )
+
+    def save_metadata(self, output_dir: str) -> None:
+        """保存 plugin name + params 元数据（不序列化 plugin 对象）。"""
+        path = Path(output_dir)
+        path.mkdir(parents=True, exist_ok=True)
         config = {
+            "backend_name": self.BACKEND_NAME,
             "random_state": self.random_state,
             "n_iter": self.n_iter,
             "batch_size": self.batch_size,
             "verbose": self.verbose,
             **self.extra_kwargs,
         }
-        with open(path, "wb") as f:
-            pickle.dump(
-                _save_dict(self._plugin, self.schema, self.BACKEND_NAME, config),
-                f,
-            )
-        logger.info(f"模型已保存到: {file_path}")
+        meta_path = path / "model_metadata.yaml"
+        meta_path.write_text(
+            f"# 仅用于重建参考，不可用于反序列化\nbackend_name: {self.BACKEND_NAME}\nparams:\n"
+            + "\n".join(f"  {k}: {v}" for k, v in config.items() if k != "backend_name"),
+            encoding="utf-8",
+        )
+        logger.info(f"模型元数据已保存: {meta_path}")
 
     @classmethod
     def load(cls, file_path: str) -> _SynthCityModelBase:
-        d = _load_common(file_path)
-        backend = d.get("backend_name")
-        if backend != cls.BACKEND_NAME:
-            raise ValueError(
-                f"模型文件为 {backend}，当前类为 {cls.BACKEND_NAME}"
-            )
-        config = d.get("config", {})
-        instance = cls(**config)
-        instance._plugin = d["plugin"]
-        instance.schema = d.get("schema")
-        logger.info(f"已加载 SynthCity {cls.BACKEND_NAME} 模型: {file_path}")
-        return instance
+        """已弃用：无法从 pickle 加载 SynthCity plugin。"""
+        raise NotImplementedError(
+            "SynthCity plugin 不可反序列化。本项目不保存/加载 plugin 对象，"
+            "研究关注 synthetic data 与 privacy，而非模型复用。"
+        )
 
 
 class SynthCityCTGANModel(_SynthCityModelBase):
@@ -220,26 +199,8 @@ class SynthCityPATEGANModel(_SynthCityModelBase):
 
 
 def load_synthcity_model(file_path: str) -> BaseModel:
-    """
-    根据保存文件中的 backend_name 加载对应的 SynthCity 模型。
-
-    Args:
-        file_path: 模型文件路径（.pkl）
-
-    Returns:
-        对应的 SynthCity 模型实例（SynthCityCTGANModel / TVAE / PATEGAN）
-    """
-    d = _load_common(file_path)
-    backend_name = d.get("backend_name")
-    if backend_name not in SYNTHCITY_GENERATORS:
-        raise ValueError(
-            f"无法识别的 SynthCity 模型: {backend_name}，"
-            f"支持: {SYNTHCITY_GENERATORS}"
-        )
-    if backend_name == "ctgan":
-        return SynthCityCTGANModel.load(file_path)
-    if backend_name == "tvae":
-        return SynthCityTVAEModel.load(file_path)
-    if backend_name == "pategan":
-        return SynthCityPATEGANModel.load(file_path)
-    raise ValueError(f"未实现的 backend: {backend_name}")
+    """已弃用：SynthCity plugin 不可 pickle 反序列化。"""
+    raise NotImplementedError(
+        "SynthCity plugin 不可反序列化。本项目不保存/加载 plugin 对象，"
+        "请于训练时通过 synthetic_rows 生成合成数据。"
+    )

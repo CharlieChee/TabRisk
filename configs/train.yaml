@@ -11,3 +11,9 @@ output_dir: outputs/train_${now:%Y%m%d_%H%M%S}
 epochs: 300
 batch_size: 500
 verbose: true
+
+# 保存与输出
+# save_model: false（默认）不保存模型对象；metadata_only 只保存 plugin name + params（用于重建参考）
+save_model: false
+# 训练完成后立即生成的合成数据行数（0=不生成）
+synthetic_rows: 1000
