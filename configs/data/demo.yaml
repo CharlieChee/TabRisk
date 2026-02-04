@@ -1,0 +1,4 @@
+# 演示数据加载配置（CSV）
+_target_: synthgen.data.load.load_csv
+params:
+  file_path: data/demo.csv
