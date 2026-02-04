@@ -99,9 +99,9 @@ def main(cfg: DictConfig) -> None:
 
     # 支持简写参数：data.path -> data.params.file_path
     if OmegaConf.is_config(cfg.get("data")) and "path" in cfg.data:
-        if "params" not in cfg.data:
-            OmegaConf.set(cfg.data, "params", {})
-        OmegaConf.set(cfg.data.params, "file_path", cfg.data.pop("path"))
+        path_value = cfg.data.pop("path")
+        cfg.data.params = cfg.data.get("params", {})
+        cfg.data.params["file_path"] = path_value
         logger.info(f"检测到简写参数 data.path，已映射到 data.params.file_path")
 
     # 获取项目根目录（Hydra 会改变工作目录，所以需要绝对路径）
