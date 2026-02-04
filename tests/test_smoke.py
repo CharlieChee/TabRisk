@@ -9,7 +9,7 @@ import shutil
 
 from synthgen.data.load import load_csv
 from synthgen.data.schema import infer_schema, Schema
-from synthgen.models.sdv_ctgan import SDVCTGANModel
+from synthgen.models import SynthCityCTGANModel, load_model
 
 
 @pytest.fixture
@@ -92,12 +92,12 @@ def test_schema_save_load(demo_data, temp_dir):
 
 
 def test_model_training_and_sampling(demo_data, temp_dir):
-    """测试模型训练和采样。"""
+    """测试模型训练和采样（SynthCity CTGAN）。"""
     # 推断 schema
     schema = infer_schema(demo_data)
 
-    # 创建模型（使用较少的 epochs 以加快测试）
-    model = SDVCTGANModel(epochs=10, batch_size=100, verbose=False)
+    # 创建模型（使用较少的 n_iter 以加快测试）
+    model = SynthCityCTGANModel(n_iter=10, batch_size=100, verbose=False, random_state=42)
 
     # 训练
     model.fit(demo_data, schema)
@@ -109,9 +109,9 @@ def test_model_training_and_sampling(demo_data, temp_dir):
 
 
 def test_model_save_load(demo_data, temp_dir):
-    """测试模型保存和加载。"""
+    """测试模型保存和加载（SynthCity 后端）。"""
     schema = infer_schema(demo_data)
-    model = SDVCTGANModel(epochs=10, batch_size=100, verbose=False)
+    model = SynthCityCTGANModel(n_iter=10, batch_size=100, verbose=False, random_state=42)
     model.fit(demo_data, schema)
 
     # 保存
@@ -119,9 +119,9 @@ def test_model_save_load(demo_data, temp_dir):
     model.save(str(model_path))
     assert model_path.exists()
 
-    # 加载
-    loaded_model = SDVCTGANModel.load(str(model_path))
-    assert loaded_model.model is not None
+    # 通过统一 load_model 加载
+    loaded_model = load_model(str(model_path))
+    assert loaded_model._plugin is not None
 
     # 验证可以采样
     synthetic = loaded_model.sample(num_rows=50)
@@ -143,16 +143,16 @@ def test_end_to_end_pipeline(demo_data, temp_dir):
     schema_path = temp_dir / "schema.json"
     schema.save(str(schema_path))
 
-    # 4. 训练模型
-    model = SDVCTGANModel(epochs=10, batch_size=100, verbose=False)
+    # 4. 训练模型（SynthCity CTGAN）
+    model = SynthCityCTGANModel(n_iter=10, batch_size=100, verbose=False, random_state=42)
     model.fit(df, schema)
 
     # 5. 保存模型
     model_path = temp_dir / "model.pkl"
     model.save(str(model_path))
 
-    # 6. 加载模型
-    loaded_model = SDVCTGANModel.load(str(model_path))
+    # 6. 通过统一 load_model 加载
+    loaded_model = load_model(str(model_path))
 
     # 7. 生成合成数据
     synthetic = loaded_model.sample(num_rows=200)

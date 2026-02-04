@@ -54,7 +54,10 @@ def instantiate_model(cfg: DictConfig) -> BaseModel:
         raise ValueError("模型配置中缺少 _target_ 字段")
 
     target = model_cfg._target_
-    params = model_cfg.get("params", {})
+    params = dict(model_cfg.get("params", {}))
+    # 统一注入随机种子，保证 SynthCity 等后端可复现
+    if "seed" in cfg:
+        params.setdefault("random_state", cfg.seed)
 
     # 动态导入并实例化
     module_path, class_name = target.rsplit(".", 1)

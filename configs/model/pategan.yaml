@@ -1,5 +1,5 @@
-# SynthCity CTGAN 模型配置
-_target_: synthgen.models.synthcity_models.SynthCityCTGANModel
+# SynthCity PATEGAN 模型配置（隐私友好）
+_target_: synthgen.models.synthcity_models.SynthCityPATEGANModel
 params:
   n_iter: ${epochs}
   batch_size: ${batch_size}

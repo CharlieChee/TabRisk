@@ -9,6 +9,7 @@ from loguru import logger
 from rich.console import Console
 
 from synthgen.models.base import BaseModel
+from synthgen.models import load_model
 from synthgen.data.schema import Schema
 
 # 获取项目根目录（configs/ 在项目根目录）
@@ -56,11 +57,8 @@ def main(cfg: DictConfig) -> None:
     if not model_path.exists():
         raise FileNotFoundError(f"模型文件不存在: {model_path}")
 
-    # 从模型路径推断模型类型（这里简化处理，假设是 SDVCTGANModel）
-    # 实际应该从保存的配置中读取
-    from synthgen.models.sdv_ctgan import SDVCTGANModel
-
-    model: BaseModel = SDVCTGANModel.load(str(model_path))
+    # 根据保存文件中的 backend 自动选择 SynthCity 或旧版 SDV 加载方式
+    model: BaseModel = load_model(str(model_path))
     logger.info(f"模型加载完成: {model_path}")
 
     # 加载 schema（可选，用于验证）

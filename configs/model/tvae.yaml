@@ -1,0 +1,8 @@
+# SynthCity TVAE 模型配置
+_target_: synthgen.models.synthcity_models.SynthCityTVAEModel
+params:
+  n_iter: ${epochs}
+  batch_size: ${batch_size}
+  verbose: ${verbose}
+  n_layers_hidden: 2
+  n_units_hidden: 256

@@ -1,12 +1,15 @@
 # TabRisk - Tabular Synthetic Data Generation
 
-基于 SDV CTGAN 的表格合成数据生成工具。
+基于 **SynthCity** 的表格合成数据生成框架，提供统一的 generator 接口，为后续隐私攻击与 utility 评估提供标准化实验基础。
+
+**Backend:** We use SynthCity as our tabular synthetic data generation backend.
 
 ## 功能特性
 
 - 📊 自动推断 CSV 数据的 schema（分类/连续变量）
-- 🤖 使用 SDV CTGAN 训练生成模型
-- 💾 保存模型和元数据
+- 🤖 使用 SynthCity 支持多种生成器：**CTGAN**、**TVAE**、**PATEGAN**
+- 📦 封装 SynthCity 使用逻辑为独立模块（`synthetic_backend.py`），统一 generator 接口
+- 💾 保存模型和元数据，随机种子与数据划分方式与原实验一致
 - 🎲 生成合成数据并导出为 CSV
 - ⚙️ 基于 Hydra 的配置管理
 - 🧪 快速 smoke test 验证
@@ -16,8 +19,8 @@
 ### 安装
 
 ```bash
-# 安装依赖（如果尚未安装）
-pip install sdv
+# 安装依赖（SynthCity）
+pip install synthcity
 
 # 安装项目（可编辑模式）
 pip install -e .
@@ -47,7 +50,18 @@ python scripts/make_demo_data.py --rows 500 --output data/my_demo.csv
 python -m synthgen.train
 ```
 
-默认配置会使用 `configs/data/demo.yaml` 中指定的数据文件（`data/demo.csv`）。
+默认配置会使用 `configs/data/demo.yaml` 中指定的数据文件（`data/demo.csv`），并使用 SynthCity CTGAN。可切换生成器：
+
+```bash
+# 使用 CTGAN（默认）
+python -m synthgen.train model=ctgan
+
+# 使用 TVAE
+python -m synthgen.train model=tvae
+
+# 使用 PATEGAN（隐私友好）
+python -m synthgen.train model=pategan
+```
 
 ### 生成合成数据
 
@@ -75,12 +89,15 @@ TabRisk/
 │   ├── train.yaml       # 训练配置
 │   ├── sample.yaml      # 采样配置
 │   ├── model/
-│   │   └── ctgan.yaml   # CTGAN 模型配置
+│   │   ├── ctgan.yaml   # SynthCity CTGAN
+│   │   ├── tvae.yaml    # SynthCity TVAE
+│   │   └── pategan.yaml # SynthCity PATEGAN
 │   └── data/
 │       └── demo.yaml    # 数据配置
 ├── src/
 │   └── synthgen/        # 主包
 │       ├── __init__.py
+│       ├── synthetic_backend.py  # SynthCity 统一封装（generator 接口）
 │       ├── data/        # 数据加载和 schema 推断
 │       │   ├── __init__.py
 │       │   ├── load.py
@@ -88,7 +105,8 @@ TabRisk/
 │       ├── models/      # 模型接口和实现
 │       │   ├── __init__.py
 │       │   ├── base.py
-│       │   └── sdv_ctgan.py
+│       │   ├── synthcity_models.py  # CTGAN / TVAE / PATEGAN（基于 SynthCity）
+│       │   └── sdv_ctgan.py         # 旧版 SDV（兼容加载）
 │       ├── train.py     # 训练入口
 │       └── sample.py    # 采样入口
 ├── scripts/
