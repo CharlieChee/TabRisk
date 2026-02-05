@@ -1,0 +1,8 @@
+# SDMetrics 评估器：QualityReport + DiagnosticReport
+name: sdv
+
+# 是否生成 DiagnosticReport（结构/边界等）
+diagnostic: true
+
+# 随机种子（若 SDMetrics 支持）
+seed: 42

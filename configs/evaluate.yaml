@@ -1,0 +1,18 @@
+# Utility evaluation 配置（完全解耦，不依赖 train 逻辑）
+# 用法: python -m synthgen.evaluate run_dir=/path/to/outputs/<run> evaluator=synthcity|sdv [target_col=...] [task_type=classification|regression]
+
+defaults:
+  - evaluator: synthcity
+
+# 必填：训练输出目录（含 schema.json, train_config.yaml, original.csv, synthetic.csv）
+run_dir: null
+
+# 评估器选择
+# evaluator: synthcity | sdv （由 defaults 或命令行指定）
+
+# 可选：目标列与任务类型（不传则从 train_config / schema 推断）
+target_col: null
+task_type: null  # classification | regression
+
+# 评估结果输出子目录（相对 run_dir）
+output_subdir: eval

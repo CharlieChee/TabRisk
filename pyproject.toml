@@ -34,10 +34,12 @@ dev = [
     "black>=23.0.0",
     "ruff>=0.1.0",
 ]
+# 评估子命令 evaluator=sdv 需要
+eval = ["sdmetrics>=0.27.0"]
 
 [tool.setuptools]
 # 显式列出包及子包，避免 synthgen.data / synthgen.models 未被安装
-packages = ["synthgen", "synthgen.compat", "synthgen.data", "synthgen.models", "synthgen.utils"]
+packages = ["synthgen", "synthgen.compat", "synthgen.data", "synthgen.models", "synthgen.utils", "synthgen.evaluation"]
 
 [tool.setuptools.package-dir]
 "" = "src"

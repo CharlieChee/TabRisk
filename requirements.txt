@@ -8,6 +8,9 @@ synthcity>=0.2.0,<0.3.0
 torch==2.0.1
 opacus==1.4.1
 
+# 可选：evaluator=sdv 时需安装 pip install sdmetrics（或 pip install synthgen[eval]）
+# sdmetrics>=0.27.0
+
 # 其余依赖（范围不超过 requirements.lock.txt / environment.lock.yml）
 pandas>=2.0.0,<=2.3.3
 numpy>=1.24.0,<=1.26.4

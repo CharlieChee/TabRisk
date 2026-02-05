@@ -1,0 +1,14 @@
+# SynthCity 评估器：统计指标 + 效用指标（Train on synthetic / Test on real）
+name: synthcity
+
+# 统计指标
+stats:
+  - ks
+  - wasserstein
+  - corr
+
+# 效用评估：使用的下游模型
+utility_metric: xgb  # xgb | logreg
+
+# 随机种子（与 train 无关，仅评估可复现）
+seed: 42
