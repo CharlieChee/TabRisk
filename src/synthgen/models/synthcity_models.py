@@ -98,6 +98,18 @@ class _SynthCityModelBase(BaseModel):
     ):
         if not self.BACKEND_NAME:
             raise ValueError("子类必须设置 BACKEND_NAME")
+
+        # 从 kwargs 中提前拿出仅用于环境控制的字段（不传给 SynthCity 插件）
+        cuda_visible_devices = kwargs.pop("cuda_visible_devices", None)
+        # 兼容旧配置中的 gpu_id，但只用于环境变量，不再透传到插件
+        legacy_gpu_id = kwargs.pop("gpu_id", None)
+        if cuda_visible_devices is not None:
+            self.cuda_visible_devices: Optional[str] = str(cuda_visible_devices)
+        elif legacy_gpu_id is not None:
+            self.cuda_visible_devices = str(legacy_gpu_id)
+        else:
+            self.cuda_visible_devices = None
+
         self.random_state = random_state
         self.n_iter = n_iter
         self.batch_size = batch_size
@@ -109,34 +121,41 @@ class _SynthCityModelBase(BaseModel):
     def _plugin_params(self) -> Dict[str, Any]:
         # 所有参数经 create_plugin -> compat.synthcity.filter_plugin_params 显式过滤后传入
         # 不在此直接传 verbose 等已知不兼容参数；extra_kwargs 也会被过滤
-        return {
+        params: Dict[str, Any] = {
             "n_iter": self.n_iter,
             "batch_size": self.batch_size,
             **self.extra_kwargs,
         }
+        # 再次兜底：确保不会把环境相关字段透传给 SynthCity 插件
+        params.pop("gpu_id", None)
+        params.pop("cuda_visible_devices", None)
+        return params
 
     def fit(self, data: pd.DataFrame, schema: Schema) -> None:
         self.schema = schema
         plugin_kwargs = self._plugin_params()
+
+        # 在创建 SynthCity 插件前，根据 cuda_visible_devices 绑定 CUDA_VISIBLE_DEVICES
+        cuda_vis = getattr(self, "cuda_visible_devices", None)
+        if cuda_vis is not None:
+            os.environ["CUDA_VISIBLE_DEVICES"] = str(cuda_vis)
+
         logger.info(f"开始训练 SynthCity {self.BACKEND_NAME} 模型...")
         logger.info(f"训练数据形状: {data.shape}, n_iter={self.n_iter}, batch_size={self.batch_size}")
         if self.BACKEND_NAME == "ctgan":
+            logger.info(f"CUDA_VISIBLE_DEVICES={os.environ.get('CUDA_VISIBLE_DEVICES', 'not set')}")
             logger.info(
-                "CUDA_VISIBLE_DEVICES=%s",
-                os.environ.get("CUDA_VISIBLE_DEVICES", "not set"),
-            )
-            logger.info(
-                "torch=%s, cuda_available=%s, device_count=%s",
-                torch.__version__,
-                torch.cuda.is_available(),
-                torch.cuda.device_count(),
+                f"torch={torch.__version__}, "
+                f"cuda_available={torch.cuda.is_available()}, "
+                f"device_count={torch.cuda.device_count()}",
             )
             if torch.cuda.is_available():
                 try:
-                    logger.info("cuda_name0=%s", torch.cuda.get_device_name(0))
+                    logger.info(f"cuda_name0={torch.cuda.get_device_name(0)}")
                 except Exception:
                     pass
-            logger.info("Creating SynthCity ctgan plugin with kwargs: %s", plugin_kwargs)
+            logger.info(f"ctgan params to synthcity: {plugin_kwargs}")
+            logger.info(f"Creating SynthCity ctgan plugin with kwargs: {plugin_kwargs}")
         self._plugin = create_plugin(
             self.BACKEND_NAME,
             random_state=self.random_state,

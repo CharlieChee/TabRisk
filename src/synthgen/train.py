@@ -27,15 +27,15 @@ os.environ.setdefault("TRANSFORMERS_NO_TORCH_WARNING", "1")
 
 
 def _maybe_set_cuda_visible_devices_from_cfg(cfg: DictConfig) -> None:
-    """从 cfg.model.params.gpu_id 读取并设置 CUDA_VISIBLE_DEVICES（仅使用 model.params）。"""
-    gpu_id = None
+    """从 cfg.model.params.cuda_visible_devices 读取并设置 CUDA_VISIBLE_DEVICES（仅使用 model.params）。"""
+    cuda_vis = None
     try:
         if hasattr(cfg.model, "params") and cfg.model.params is not None:
-            gpu_id = cfg.model.params.get("gpu_id", None)
+            cuda_vis = cfg.model.params.get("cuda_visible_devices", None)
     except Exception:
-        gpu_id = None
-    if gpu_id is not None:
-        os.environ["CUDA_VISIBLE_DEVICES"] = str(gpu_id)
+        cuda_vis = None
+    if cuda_vis is not None:
+        os.environ["CUDA_VISIBLE_DEVICES"] = str(cuda_vis)
 
 # 获取项目根目录（configs/ 在项目根目录）
 # 当使用 python -m synthgen.train 时，工作目录是项目根目录
@@ -127,7 +127,7 @@ def instantiate_data_loader(cfg: DictConfig, project_root: Path) -> pd.DataFrame
 def main(cfg: DictConfig) -> None:
     """训练主函数。"""
 
-    # 在导入 torch / 创建 SynthCity 插件前，根据 cfg.model.params.gpu_id 绑定 CUDA_VISIBLE_DEVICES
+    # 在导入 torch / 创建 SynthCity 插件前，根据 cfg.model.params.cuda_visible_devices 绑定 CUDA_VISIBLE_DEVICES
     _maybe_set_cuda_visible_devices_from_cfg(cfg)
 
     import torch  # 延迟导入，确保上面的环境变量已生效

@@ -69,9 +69,10 @@ def create_plugin(
     plugins = Plugins()
     params = filter_plugin_params(name, params, plugins)
 
-    # 显式移除 gpu_id，禁止透传到 SynthCity 插件；device 仍然保留
+    # 显式移除 gpu_id / cuda_visible_devices，禁止透传到 SynthCity 插件；device 仍然保留
     params = dict(params)
     params.pop("gpu_id", None)
+    params.pop("cuda_visible_devices", None)
 
     plugin = plugins.get(name, **params)
     logger.debug(f"已创建 SynthCity 插件: {name}, random_state={random_state}")
