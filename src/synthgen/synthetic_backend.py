@@ -68,6 +68,11 @@ def create_plugin(
     params: Dict[str, Any] = {"random_state": random_state, **kwargs}
     plugins = Plugins()
     params = filter_plugin_params(name, params, plugins)
+
+    # 拷贝一份参数并显式移除 gpu_id，禁止透传到 SynthCity 插件
+    params = dict(params)
+    gpu_id = params.pop("gpu_id", None)  # noqa: F841 - 保留以便后续如需使用
+
     plugin = plugins.get(name, **params)
     logger.debug(f"已创建 SynthCity 插件: {name}, random_state={random_state}")
     return plugin
