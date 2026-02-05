@@ -101,14 +101,15 @@ def _load_hf(
     """从 HuggingFace Datasets 加载，转成 pandas，缓存到 cache_dir。
     在国内网络下默认使用 HF 镜像（hf_mirror），可通过配置或环境变量 HF_ENDPOINT 覆盖。
     """
+    # 必须在 import datasets 之前设置 HF_ENDPOINT，否则 huggingface_hub 会先用默认 endpoint
+    # 初始化 HTTP 客户端，后续切换会导致 "client has been closed" 等错误
+    if hf_mirror and "HF_ENDPOINT" not in os.environ:
+        os.environ["HF_ENDPOINT"] = hf_mirror.rstrip("/")
+
     try:
         from datasets import load_dataset
     except ImportError as e:
         raise ImportError("HF 数据源需要安装 datasets: pip install datasets") from e
-
-    # 国内镜像：若未设置 HF_ENDPOINT 且指定了 hf_mirror，则使用镜像下载
-    if hf_mirror and "HF_ENDPOINT" not in os.environ:
-        os.environ["HF_ENDPOINT"] = hf_mirror.rstrip("/")
 
     cache_path = _ensure_cache_dir(cache_dir)
     hf_cache = str(cache_path / "hf")
@@ -210,6 +211,9 @@ def load_dataset(
     if source == "openml":
         df = _load_openml(name=name, openml_id=openml_id, split=split, cache_dir=cache_dir, **kwargs)
     elif source == "hf":
+        # 尽早设置镜像，避免其他模块已导入 huggingface_hub 后再设导致 client 异常
+        if hf_mirror and "HF_ENDPOINT" not in os.environ:
+            os.environ["HF_ENDPOINT"] = hf_mirror.rstrip("/")
         df = _load_hf(name=name, split=split, cache_dir=cache_dir, hf_mirror=hf_mirror, **kwargs)
     elif source == "sdv_demo":
         df = _load_sdv_demo(name=name, cache_dir=cache_dir, **kwargs)

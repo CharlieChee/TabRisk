@@ -127,6 +127,14 @@ def instantiate_data_loader(cfg: DictConfig, project_root: Path) -> pd.DataFrame
 def main(cfg: DictConfig) -> None:
     """训练主函数。"""
 
+    # 使用 HuggingFace 数据源时，必须在首次 import datasets/huggingface_hub 前设置 HF_ENDPOINT，
+    # 否则会出现 "Cannot send a request, as the client has been closed" 等错误
+    if OmegaConf.is_config(cfg.get("data")):
+        params = getattr(cfg.data, "params", None) or {}
+        if OmegaConf.select(params, "source") == "hf" and "HF_ENDPOINT" not in os.environ:
+            from synthgen.data.load import HF_MIRROR_DEFAULT
+            os.environ["HF_ENDPOINT"] = HF_MIRROR_DEFAULT.rstrip("/")
+
     # 在导入 torch / 创建 SynthCity 插件前，根据 cfg.model.params.cuda_visible_devices 绑定 CUDA_VISIBLE_DEVICES
     _maybe_set_cuda_visible_devices_from_cfg(cfg)
 
