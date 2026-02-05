@@ -10,10 +10,11 @@ backend, keeping the same fit/sample interface and schema usage.
 
 from __future__ import annotations
 
-import inspect
 import os
+import threading
+import time
 from pathlib import Path
-from typing import Any, Dict, Optional
+from typing import Any, Dict, List, Optional, Tuple
 
 import pandas as pd
 import torch
@@ -25,43 +26,61 @@ from synthgen.synthetic_backend import SYNTHCITY_GENERATORS, create_plugin
 from synthgen.utils.conversion import to_dataframe
 
 
-def _get_synthcity_plugin_class(name: str) -> Optional[type]:
-    """获取 SynthCity 插件类（用于 inspect 构造参数）。"""
-    try:
-        from synthcity.plugins import Plugins
-        plugins = Plugins()
-        if hasattr(plugins, "plugins") and isinstance(getattr(plugins, "plugins"), dict):
-            return plugins.plugins.get(name)
-        if hasattr(plugins, "_plugins") and isinstance(getattr(plugins, "_plugins"), dict):
-            return plugins._plugins.get(name)
-    except Exception:
-        pass
-    return None
+def _first_param_device(m: Any) -> Optional[str]:
+    """返回 torch.nn.Module 第一个参数的 device 字符串。"""
+    if not isinstance(m, torch.nn.Module):
+        return None
+    for p in m.parameters():
+        return str(p.device)
+    return "no-params"
 
 
-def _move_torch_modules_to_cuda(plugin: Any) -> None:
-    """在 plugin 内查找 torch.nn.Module（model/_model/net/generator/discriminator 等）并 .to('cuda')。"""
-    if plugin is None:
-        return
-    candidates = ("model", "_model", "net", "_net", "generator", "discriminator", "_generator", "_discriminator")
-    seen: set[int] = set()
-    for attr_name in candidates:
+def _find_torch_modules(obj: Any, prefix: str = "plugin", max_depth: int = 5, visited: Optional[set[int]] = None) -> List[Tuple[str, Any]]:
+    """递归扫描 obj 找到所有 torch.nn.Module，返回 (path, module) 列表。"""
+    if visited is None:
+        visited = set()
+    oid = id(obj)
+    if oid in visited:
+        return []
+    visited.add(oid)
+    found: List[Tuple[str, Any]] = []
+    if isinstance(obj, torch.nn.Module):
+        found.append((prefix, obj))
+    if max_depth <= 0:
+        return found
+    if isinstance(obj, dict):
+        for k, v in list(obj.items())[:200]:
+            found.extend(_find_torch_modules(v, f"{prefix}[{repr(k)}]", max_depth - 1, visited))
+        return found
+    if isinstance(obj, (list, tuple, set)):
+        for i, v in enumerate(list(obj)[:200]):
+            found.extend(_find_torch_modules(v, f"{prefix}[{i}]", max_depth - 1, visited))
+        return found
+    for name in dir(obj):
+        if name.startswith("__"):
+            continue
+        if name in ("__dict__", "__class__", "__weakref__"):
+            continue
         try:
-            child = getattr(plugin, attr_name, None)
-            if child is not None and id(child) not in seen and isinstance(child, torch.nn.Module):
-                seen.add(id(child))
-                child.to("cuda")
-                logger.info("moved %s to cuda", attr_name)
+            val = getattr(obj, name)
         except Exception:
-            pass
+            continue
+        if isinstance(val, (int, float, str, bytes, bool, type(None))):
+            continue
+        found.extend(_find_torch_modules(val, f"{prefix}.{name}", max_depth - 1, visited))
+    return found
+
+
+def _log_device_scan_later(plugin: Any, delay: int = 10) -> None:
+    """后台线程：等待 delay 秒后递归扫描 plugin 内 torch.nn.Module 并打印 first_param_device。"""
+    time.sleep(delay)
     try:
-        for attr_name, child in vars(plugin).items():
-            if child is not None and id(child) not in seen and isinstance(child, torch.nn.Module):
-                seen.add(id(child))
-                child.to("cuda")
-                logger.info("moved %s to cuda", attr_name)
-    except Exception:
-        pass
+        mods = _find_torch_modules(plugin, "plugin", max_depth=5)
+        logger.info("[deep-scan] found %s torch.nn.Module(s) after %ss", len(mods), delay)
+        for path, m in mods[:30]:
+            logger.info("[deep-scan] %s first_param_device=%s", path, _first_param_device(m))
+    except Exception as e:
+        logger.warning("[deep-scan] failed: %r", e)
 
 
 class _SynthCityModelBase(BaseModel):
@@ -98,39 +117,37 @@ class _SynthCityModelBase(BaseModel):
 
     def fit(self, data: pd.DataFrame, schema: Schema) -> None:
         self.schema = schema
-        self._plugin = create_plugin(
-            self.BACKEND_NAME,
-            random_state=self.random_state,
-            **self._plugin_params(),
-        )
+        plugin_kwargs = self._plugin_params()
         logger.info(f"开始训练 SynthCity {self.BACKEND_NAME} 模型...")
         logger.info(f"训练数据形状: {data.shape}, n_iter={self.n_iter}, batch_size={self.batch_size}")
         if self.BACKEND_NAME == "ctgan":
             logger.info(
-                "CTGAN GPU: torch.cuda.is_available()=%s, CUDA_VISIBLE_DEVICES=%s, plugin.device=%s",
-                torch.cuda.is_available(),
+                "CUDA_VISIBLE_DEVICES=%s",
                 os.environ.get("CUDA_VISIBLE_DEVICES", "not set"),
-                getattr(self._plugin, "device", "unknown"),
             )
-            try:
-                for attr in ("model", "_model", "generator", "discriminator"):
-                    m = getattr(self._plugin, attr, None)
-                    if m is not None and isinstance(m, torch.nn.Module) and hasattr(m, "parameters"):
-                        try:
-                            dev = next(m.parameters(), None)
-                            logger.info("CTGAN underlying %s device: %s", attr, dev.device if dev is not None else "N/A")
-                        except Exception:
-                            pass
-                        break
-            except Exception:
-                pass
-            _move_torch_modules_to_cuda(self._plugin)
-            epochs = getattr(self._plugin, "epochs", self.n_iter)
-            logger.info("CTGAN epochs: %s", epochs)
-            logger.info("CTGAN training started...")
+            logger.info(
+                "torch=%s, cuda_available=%s, device_count=%s",
+                torch.__version__,
+                torch.cuda.is_available(),
+                torch.cuda.device_count(),
+            )
+            if torch.cuda.is_available():
+                try:
+                    logger.info("cuda_name0=%s", torch.cuda.get_device_name(0))
+                except Exception:
+                    pass
+            logger.info("Creating SynthCity ctgan plugin with kwargs: %s", plugin_kwargs)
+        self._plugin = create_plugin(
+            self.BACKEND_NAME,
+            random_state=self.random_state,
+            **plugin_kwargs,
+        )
+        if self.BACKEND_NAME == "ctgan":
+            logger.info("CTGAN plugin created; starting fit() ...")
+            threading.Thread(target=_log_device_scan_later, args=(self._plugin, 10), daemon=True).start()
         self._plugin.fit(data)
         if self.BACKEND_NAME == "ctgan":
-            logger.info("CTGAN training finished.")
+            logger.info("CTGAN fit() finished.")
         logger.info("模型训练完成")
 
     def sample(self, num_rows: int) -> pd.DataFrame:
@@ -215,23 +232,13 @@ class SynthCityCTGANModel(_SynthCityModelBase):
         )
 
     def _plugin_params(self) -> Dict[str, Any]:
-        """根据 CTGAN 构造函数签名自动探测并传入 GPU 参数（device/cuda/use_cuda/gpu）。"""
+        """从配置读 device；当 device=cuda 且 torch.cuda.is_available() 时传 device='cuda' 给插件。"""
         params = super()._plugin_params()
-        plugin_cls = _get_synthcity_plugin_class("ctgan")
-        if plugin_cls is not None:
-            try:
-                sig = inspect.signature(plugin_cls.__init__)
-                allowed = set(sig.parameters.keys())
-                if "device" in allowed:
-                    params["device"] = "cuda:0"
-                elif "cuda" in allowed:
-                    params["cuda"] = True
-                elif "use_cuda" in allowed:
-                    params["use_cuda"] = True
-                elif "gpu" in allowed:
-                    params["gpu"] = True
-            except Exception:
-                pass
+        device = self.extra_kwargs.get("device", "cpu")
+        if device == "cuda" and torch.cuda.is_available():
+            params["device"] = "cuda"
+        else:
+            params["device"] = "cpu"
         return params
 
 

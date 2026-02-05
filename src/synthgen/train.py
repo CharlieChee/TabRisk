@@ -1,6 +1,7 @@
 """Training entry point."""
 
 import os
+import sys
 
 os.environ.setdefault("OMP_NUM_THREADS", "8")
 os.environ.setdefault("MKL_NUM_THREADS", "8")
@@ -8,7 +9,40 @@ os.environ.setdefault("NUMEXPR_NUM_THREADS", "8")
 os.environ.setdefault("USE_TORCH", "1")
 os.environ.setdefault("TRANSFORMERS_NO_TORCH_WARNING", "1")
 
-import sys
+# 必须在 import torch 前绑定 CUDA_VISIBLE_DEVICES（命令行 override 优先生效）
+for arg in sys.argv:
+    if arg.startswith("model.gpu_id=") or arg.startswith("model.params.gpu_id="):
+        _, val = arg.split("=", 1)
+        if val.strip() and val.lower() not in ("null", "none", ""):
+            os.environ["CUDA_VISIBLE_DEVICES"] = val.strip()
+        break
+    if arg.startswith("runtime.gpu_id="):
+        _, val = arg.split("=", 1)
+        if val.strip() and val.lower() not in ("null", "none", ""):
+            os.environ["CUDA_VISIBLE_DEVICES"] = val.strip()
+        break
+
+
+def _maybe_set_cuda_visible_devices(cfg) -> None:
+    """从 cfg.model.gpu_id 或 cfg.runtime.gpu_id 设置 CUDA_VISIBLE_DEVICES（main 内尽早调用）。"""
+    gpu_id = None
+    try:
+        gpu_id = cfg.model.get("gpu_id", None)
+    except Exception:
+        pass
+    if gpu_id is None:
+        try:
+            if hasattr(cfg.model, "params") and cfg.model.params is not None:
+                gpu_id = cfg.model.params.get("gpu_id", None)
+        except Exception:
+            pass
+    if gpu_id is None:
+        try:
+            gpu_id = cfg.runtime.get("gpu_id", None)
+        except Exception:
+            pass
+    if gpu_id is not None:
+        os.environ["CUDA_VISIBLE_DEVICES"] = str(gpu_id)
 import random
 from pathlib import Path
 import numpy as np
@@ -117,6 +151,9 @@ def instantiate_data_loader(cfg: DictConfig, project_root: Path) -> pd.DataFrame
 @hydra.main(version_base=None, config_path=str(CONFIG_DIR), config_name="train")
 def main(cfg: DictConfig) -> None:
     """训练主函数。"""
+    _maybe_set_cuda_visible_devices(cfg)
+    logger.info("CUDA_VISIBLE_DEVICES=%s", os.environ.get("CUDA_VISIBLE_DEVICES", "not set"))
+
     console = Console()
 
     # 支持简写参数：data.path -> data.params.file_path（只读 path，不修改 cfg.data 结构）
@@ -138,10 +175,10 @@ def main(cfg: DictConfig) -> None:
     setup_logging(output_dir)
 
     logger.info(
-        f"torch={torch.__version__}, "
-        f"cuda={torch.version.cuda}, "
-        f"cuda_available={torch.cuda.is_available()}, "
-        f"device_count={torch.cuda.device_count()}"
+        "torch=%s, cuda_available=%s, device_count=%s",
+        torch.__version__,
+        torch.cuda.is_available(),
+        torch.cuda.device_count(),
     )
 
     console.print(f"[bold green]开始训练[/bold green]")

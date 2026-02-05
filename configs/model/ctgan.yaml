@@ -1,6 +1,8 @@
 # SynthCity CTGAN 模型配置
 _target_: synthgen.models.synthcity_models.SynthCityCTGANModel
 params:
+  device: cpu   # 可选: cpu / cuda，命令行可 override：model.params.device=cuda
+  gpu_id: null # 可选: 0..N-1，null 表示不设置 CUDA_VISIBLE_DEVICES；命令行可 override：model.params.gpu_id=6
   n_iter: ${epochs}
   batch_size: ${batch_size}
   verbose: ${verbose}
