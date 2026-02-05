@@ -5,6 +5,7 @@ import random
 from pathlib import Path
 import numpy as np
 import pandas as pd
+import torch
 import hydra
 from omegaconf import DictConfig, OmegaConf
 from loguru import logger
@@ -12,6 +13,9 @@ from rich.console import Console
 from rich.table import Table
 
 from synthgen.data.load import load_csv, load_dataset
+
+print("torch:", torch.__version__, "cuda:", torch.version.cuda, "cuda_available:", torch.cuda.is_available())
+print("device_count:", torch.cuda.device_count(), "current:", torch.cuda.current_device() if torch.cuda.is_available() else None)
 from synthgen.data.schema import infer_schema
 from synthgen.models.base import BaseModel
 
