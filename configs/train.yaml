@@ -5,6 +5,9 @@ defaults:
 
 # 训练配置
 seed: 42
+# 若 use_detailed_output_dir=true（默认），则根据 data/model/train_rows/n_iter 等自动生成目录名；
+# 若=false 或命令行显式指定 output_dir=...，则使用 output_dir
+use_detailed_output_dir: true
 output_dir: outputs/train_${now:%Y%m%d_%H%M%S}
 
 # 训练参数

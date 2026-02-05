@@ -240,6 +240,7 @@ def test_train_with_data_path_override(demo_data, temp_dir):
             f"+data.path={csv_path.resolve()}",
             "epochs=2",
             "synthetic_rows=100",
+            "use_detailed_output_dir=false",
             f"output_dir={(temp_dir / 'train_out').resolve()}",
         ],
         cwd=project_root,

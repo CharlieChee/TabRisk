@@ -3,6 +3,7 @@
 import os
 import sys
 import random
+from datetime import datetime
 from pathlib import Path
 
 import numpy as np
@@ -41,6 +42,68 @@ def _maybe_set_cuda_visible_devices_from_cfg(cfg: DictConfig) -> None:
 # 当使用 python -m synthgen.train 时，工作目录是项目根目录
 PROJECT_ROOT = Path(__file__).parent.parent.parent.resolve()
 CONFIG_DIR = PROJECT_ROOT / "configs"
+
+
+def _safe_str(val) -> str:
+    """将配置值转为目录名安全的字符串（去除特殊字符）。"""
+    s = str(val).strip()
+    for c in "/\\:*?\"<>|":
+        s = s.replace(c, "_")
+    return s if s else ""
+
+
+def build_output_dir(cfg: DictConfig, project_root: Path) -> Path:
+    """构建包含详细信息的输出目录名，便于从目录名识别实验配置。
+
+    示例：train_adult_hf_10000rows_ctgan_100iter_20260205_132935
+    """
+    parts = ["train"]
+
+    # 从 Hydra runtime.choices 获取 config group 选择（数据名、模型名等）
+    choices = None
+    try:
+        from hydra.core.hydra_config import HydraConfig
+        hydra_cfg = HydraConfig.get()
+        choices = getattr(getattr(hydra_cfg, "runtime", None), "choices", None)
+    except Exception:
+        pass
+
+    # 数据名：如 standard/adult_hf -> adult_hf
+    if choices:
+        data_choice = OmegaConf.select(choices, "data", default=None)
+        if data_choice:
+            data_name = str(data_choice).split("/")[-1] if "/" in str(data_choice) else str(data_choice)
+            if data_name:
+                parts.append(_safe_str(data_name))
+
+    # train_rows
+    train_rows = getattr(cfg, "train_rows", None)
+    if train_rows is not None and int(train_rows) > 0:
+        parts.append(f"{train_rows}rows")
+
+    # model 名：优先从 choices 获取，否则用 model.name
+    model_str = None
+    if choices:
+        model_choice = OmegaConf.select(choices, "model", default=None)
+        model_str = str(model_choice) if model_choice else None
+    if not model_str:
+        model_str = OmegaConf.select(cfg, "model.name", default=None)
+    if model_str and str(model_str) not in ("None", "null"):
+        parts.append(_safe_str(str(model_str).split(".")[-1]))
+
+    # n_iter
+    n_iter = OmegaConf.select(cfg, "model.params.n_iter", default=None)
+    if n_iter is not None:
+        try:
+            parts.append(f"{int(n_iter)}iter")
+        except (TypeError, ValueError):
+            pass
+
+    # 时间戳
+    parts.append(datetime.now().strftime("%Y%m%d_%H%M%S"))
+
+    dir_name = "_".join(str(p) for p in parts)
+    return project_root / "outputs" / dir_name
 
 
 def setup_logging(output_dir: Path) -> None:
@@ -163,9 +226,13 @@ def main(cfg: DictConfig) -> None:
 
     # 获取项目根目录（Hydra 会改变工作目录，所以需要绝对路径）
     project_root = PROJECT_ROOT.resolve()
-    
-    # 创建输出目录（相对于项目根目录）
-    output_dir = project_root / cfg.output_dir
+
+    # 创建输出目录：默认使用详细名称（含 data/train_rows/model/n_iter）；显式指定 output_dir 时使用之
+    use_detailed = getattr(cfg, "use_detailed_output_dir", True)
+    if use_detailed:
+        output_dir = build_output_dir(cfg, project_root)
+    else:
+        output_dir = Path(cfg.output_dir) if Path(cfg.output_dir).is_absolute() else project_root / cfg.output_dir
     output_dir.mkdir(parents=True, exist_ok=True)
 
     # 设置日志
