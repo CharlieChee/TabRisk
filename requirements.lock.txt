@@ -4,8 +4,8 @@ aiohappyeyeballs==2.6.1
 aiohttp==3.13.3
 aiosignal==1.4.0
 alembic==1.18.3
-annotated-types @ file:///home/conda/feedstock_root/build_artifacts/annotated-types_1733247046149/work
-antlr4-python3-runtime @ file:///home/conda/feedstock_root/build_artifacts/antlr-python-runtime-meta_1638309185939/work
+annotated-types==0.7.0
+antlr4-python3-runtime==4.9.3
 anyio==4.12.1
 arfpy==0.1.1
 attrs==25.4.0
@@ -25,7 +25,7 @@ click==8.3.1
 cloudpathlib==0.23.0
 cloudpickle==3.1.2
 cmake==4.2.1
-colorama @ file:///home/conda/feedstock_root/build_artifacts/colorama_1733218098505/work
+colorama==0.4.6
 colorlog==6.10.1
 confection==0.1.5
 contourpy==1.3.3
@@ -37,10 +37,10 @@ cuda-pathfinder==1.3.3
 cycler==0.12.1
 cymem==2.0.13
 datasets==4.5.0
-decaf-synthetic-data==0.1.6
+decaf-synthetic-data==0.1.7
 deepecho==0.8.0
 dill==0.4.0
-exceptiongroup @ file:///home/conda/feedstock_root/build_artifacts/exceptiongroup_1763918002538/work
+exceptiongroup==1.3.1
 Faker==40.1.2
 fastai==2.7.19
 fastcore==1.7.29
@@ -72,12 +72,12 @@ httpcore==1.0.9
 httplib2==0.31.2
 httpx==0.28.1
 huggingface_hub==1.4.0
-hydra-core @ file:///home/conda/feedstock_root/build_artifacts/hydra-core_1736934708722/work
+hydra-core==1.3.2
 idna==3.11
 imbalanced-learn==0.14.1
 importlib_metadata==8.7.1
 inflate64==1.0.4
-iniconfig @ file:///home/conda/feedstock_root/build_artifacts/iniconfig_1760831328738/work
+iniconfig==2.3.0
 interface-meta==1.3.0
 Jinja2==3.1.6
 jmespath==1.1.0
@@ -88,13 +88,13 @@ lifelines==0.29.0
 lightning-utilities==0.15.2
 lit==18.1.8
 llvmlite==0.46.0
-loguru @ file:///home/conda/feedstock_root/build_artifacts/loguru_1746634721458/work
+loguru==0.7.3
 Mako==1.3.10
 Markdown==3.10.1
-markdown-it-py @ file:///home/conda/feedstock_root/build_artifacts/markdown-it-py_1754951200865/work
+markdown-it-py==4.0.0
 MarkupSafe==3.0.3
 matplotlib==3.10.8
-mdurl @ file:///home/conda/feedstock_root/build_artifacts/mdurl_1733255585584/work
+mdurl==0.1.2
 monai==1.4.0
 mpmath==1.3.0
 multidict==6.7.1
@@ -105,7 +105,7 @@ narwhals==2.16.0
 networkx==2.8.8
 nflows==0.14
 numba==0.63.1
-numpy @ file:///home/conda/feedstock_root/build_artifacts/numpy_1707225376651/work/dist/numpy-1.26.4-cp311-cp311-linux_x86_64.whl#sha256=d08e1c9e5833ae7780563812aa73e2497db1ee3bd5510d3becb8aa18aa2d0c7c
+numpy==1.26.4
 nvidia-cublas-cu11==11.10.3.66
 nvidia-cublas-cu12==12.1.3.1
 nvidia-cuda-cupti-cu11==11.7.101
@@ -128,26 +128,27 @@ nvidia-cusparse-cu12==12.1.0.106
 nvidia-cusparselt-cu12==0.7.1
 nvidia-nccl-cu11==2.14.3
 nvidia-nccl-cu12==2.19.3
-nvidia-nvjitlink-cu12==12.8.93
+nvidia-nvjitlink-cu12==12.9.86
 nvidia-nvshmem-cu12==3.4.5
 nvidia-nvtx-cu11==11.7.91
 nvidia-nvtx-cu12==12.1.105
-omegaconf @ file:///home/conda/feedstock_root/build_artifacts/omegaconf_1670575376789/work
+omegaconf==2.3.0
 opacus==1.4.1
 opt_einsum==3.4.0
 optuna==4.7.0
-packaging @ file:///home/task_176104885106445/conda-bld/packaging_1761049078006/work
+packaging==25.0
 pandas==2.3.3
 patsy==1.0.2
 pgmpy==0.1.26
 pillow==12.1.0
+pip==26.0.1
 platformdirs==4.5.1
 plotly==6.5.2
-pluggy @ file:///home/conda/feedstock_root/build_artifacts/bld/rattler-build_pluggy_1764896838/work
+pluggy==1.6.0
 preshed==3.0.12
 propcache==0.4.1
 proto-plus==1.27.1
-protobuf==5.29.5
+protobuf==5.29.6
 psutil==7.2.2
 py7zr==1.1.0
 pyarrow==22.0.0
@@ -158,32 +159,33 @@ pybind11==3.0.1
 pycox==0.3.0
 pycparser==3.0
 pycryptodomex==3.23.0
-pydantic==1.10.26
-pydantic_core @ file:///home/conda/feedstock_root/build_artifacts/bld/rattler-build_pydantic-core_1762988992/work
-Pygments @ file:///home/conda/feedstock_root/build_artifacts/pygments_1750615794071/work
+pydantic==2.12.5
+pydantic_core==2.41.5
+Pygments==2.19.2
 pykeops==2.3
 pyparsing==3.3.2
 pyppmd==1.3.1
-pytest @ file:///home/conda/feedstock_root/build_artifacts/bld/rattler-build_pytest_1765062031/work
-python-dateutil @ file:///home/conda/feedstock_root/build_artifacts/bld/rattler-build_python-dateutil_1751104122/work
-pytorch-lightning==1.9.5
+pytest==9.0.2
+python-dateutil==2.9.0.post0
+pytorch-lightning==2.6.1
 pyts==0.13.0
 pytz==2025.2
-PyYAML @ file:///home/conda/feedstock_root/build_artifacts/pyyaml_1758891829620/work
+PyYAML==6.0.3
 rdt==1.20.0
 redis==7.1.0
 regex==2026.1.15
 requests==2.32.5
-rich @ file:///home/conda/feedstock_root/build_artifacts/bld/rattler-build_rich_1769971520/work/dist
+rich==14.3.2
 s3transfer==0.16.0
 safetensors==0.7.0
-scikit-learn==1.1.3
-scipy @ file:///croot/scipy_1701295040508/work/dist/scipy-1.11.4-cp311-cp311-linux_x86_64.whl#sha256=74b7b4764a9f6e46c9107a2323630d09fea828257483688b7747ccc5b49c2f92
+scikit-learn==1.3.2
+scipy==1.17.0
 sdmetrics==0.27.0
 sdv==1.33.0
+setuptools==80.10.2
 shap==0.49.1
 shellingham==1.5.4
-six @ file:///home/conda/feedstock_root/build_artifacts/bld/rattler-build_six_1753199211/work
+six==1.17.0
 sklearn-compat==0.1.5
 slicer==0.0.8
 smart_open==7.5.0
@@ -194,35 +196,36 @@ SQLAlchemy==2.0.46
 srsly==2.5.2
 statsmodels==0.14.6
 sympy==1.14.0
-synthcity==0.2.4
--e git+ssh://git@github.com/CharlieChee/TabRisk.git@a8cc75192cc7b10d41a9272d321a8575d564c505#egg=synthgen
-tenacity==9.1.2
+synthcity==0.2.12
+synthgen==0.1.0
+tenacity==9.1.3
 tensorboard==2.20.0
 tensorboard-data-server==0.7.2
 texttable==1.7.0
 thinc==8.3.10
 threadpoolctl==3.6.0
 tokenizers==0.22.2
-tomli @ file:///home/conda/feedstock_root/build_artifacts/bld/rattler-build_tomli_1768146676/work
-torch==2.0.1
+tomli==2.4.0
+torch==2.2.2
 torchdata==0.6.1
 torchmetrics==1.8.2
-torchtext==0.15.2
+torchtext==0.17.2
 torchtuples==0.2.2
-torchvision==0.15.2
+torchvision==0.17.2
 tqdm==4.67.3
 transformers==5.0.0
-triton==2.0.0
+triton==2.2.0
 tsai==0.4.0
 typer-slim==0.21.1
-typing-inspection @ file:///home/conda/feedstock_root/build_artifacts/typing-inspection_1764158251755/work
-typing_extensions @ file:///home/conda/feedstock_root/build_artifacts/bld/rattler-build_typing_extensions_1756220668/work
+typing_extensions==4.15.0
+typing-inspection==0.4.2
 tzdata==2025.3
 uritemplate==4.2.0
 urllib3==2.6.3
 wasabi==1.1.3
 weasel==0.4.3
 Werkzeug==3.1.5
+wheel==0.46.3
 wrapt==2.1.1
 xgboost==2.1.4
 xgbse==0.3.3
