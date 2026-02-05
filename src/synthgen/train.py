@@ -1,5 +1,13 @@
 """Training entry point."""
 
+import os
+
+os.environ.setdefault("OMP_NUM_THREADS", "8")
+os.environ.setdefault("MKL_NUM_THREADS", "8")
+os.environ.setdefault("NUMEXPR_NUM_THREADS", "8")
+os.environ.setdefault("USE_TORCH", "1")
+os.environ.setdefault("TRANSFORMERS_NO_TORCH_WARNING", "1")
+
 import sys
 import random
 from pathlib import Path
@@ -127,6 +135,13 @@ def main(cfg: DictConfig) -> None:
 
     # 设置日志
     setup_logging(output_dir)
+
+    logger.info(
+        f"torch={torch.__version__}, "
+        f"cuda={torch.version.cuda}, "
+        f"cuda_available={torch.cuda.is_available()}, "
+        f"device_count={torch.cuda.device_count()}"
+    )
 
     console.print(f"[bold green]开始训练[/bold green]")
     console.print(f"输出目录: {output_dir}")

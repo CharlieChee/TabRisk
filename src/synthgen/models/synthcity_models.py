@@ -63,7 +63,14 @@ class _SynthCityModelBase(BaseModel):
         )
         logger.info(f"开始训练 SynthCity {self.BACKEND_NAME} 模型...")
         logger.info(f"训练数据形状: {data.shape}, n_iter={self.n_iter}, batch_size={self.batch_size}")
+        if self.BACKEND_NAME == "ctgan":
+            logger.info(f"CTGAN training device: {getattr(self._plugin, 'device', 'unknown')}")
+            epochs = getattr(self._plugin, "epochs", self.n_iter)
+            logger.info(f"CTGAN epochs: {epochs}")
+            logger.info("CTGAN training started...")
         self._plugin.fit(data)
+        if self.BACKEND_NAME == "ctgan":
+            logger.info("CTGAN training finished.")
         logger.info("模型训练完成")
 
     def sample(self, num_rows: int) -> pd.DataFrame:
@@ -146,6 +153,12 @@ class SynthCityCTGANModel(_SynthCityModelBase):
             discriminator_n_units_hidden=discriminator_n_units_hidden,
             **kwargs,
         )
+
+    def _plugin_params(self) -> Dict[str, Any]:
+        """CTGAN 强制使用 GPU，避免无日志的 CPU 训练。"""
+        params = super()._plugin_params()
+        params["device"] = "cuda"
+        return params
 
 
 class SynthCityTVAEModel(_SynthCityModelBase):
