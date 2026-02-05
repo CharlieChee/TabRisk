@@ -174,12 +174,14 @@ def run_evaluation(cfg: DictConfig) -> None:
         metrics_serializable["_details"] = _serialize(details)
 
     import json
-    metrics_json_path = eval_dir / "metrics.json"
+    # 按 evaluator 区分文件名，避免 sdv / synthcity 等互相覆盖
+    suffix = evaluator_name
+    metrics_json_path = eval_dir / f"metrics_{suffix}.json"
     with open(metrics_json_path, "w", encoding="utf-8") as f:
         json.dump(metrics_serializable, f, ensure_ascii=False, indent=2)
 
     # 可选：metrics.csv（每行一个 metric name, value）
-    metrics_csv_path = eval_dir / "metrics.csv"
+    metrics_csv_path = eval_dir / f"metrics_{suffix}.csv"
     rows = []
     for k, v in metrics_dict.items():
         if isinstance(v, (int, float, str, bool)) or v is None:
@@ -192,11 +194,11 @@ def run_evaluation(cfg: DictConfig) -> None:
         pd.DataFrame(rows).to_csv(metrics_csv_path, index=False)
 
     # 保存评估配置便于复现
-    eval_config_path = eval_dir / "eval_config.yaml"
+    eval_config_path = eval_dir / f"eval_config_{suffix}.yaml"
     OmegaConf.save(config=cfg, f=eval_config_path)
 
     from loguru import logger
-    logger.info(f"评估完成。metrics.json: {metrics_json_path}")
-    logger.info(f"eval_config.yaml: {eval_config_path}")
+    logger.info(f"评估完成。metrics_{suffix}.json: {metrics_json_path}")
+    logger.info(f"eval_config_{suffix}.yaml: {eval_config_path}")
     if rows:
-        logger.info(f"metrics.csv: {metrics_csv_path}")
+        logger.info(f"metrics_{suffix}.csv: {metrics_csv_path}")
