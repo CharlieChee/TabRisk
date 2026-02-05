@@ -267,17 +267,21 @@ class SynthCityCTGANModel(_SynthCityModelBase):
         def _scan_modules(root_obj):
             mods = []
             seen = set()
+            # 使用显式栈替代递归，避免深层对象图导致 RecursionError
+            stack = [("root", root_obj)]
 
-            def rec(o, prefix="root"):
+            while stack:
+                prefix, o = stack.pop()
                 oid = id(o)
                 if oid in seen:
-                    return
+                    continue
                 seen.add(oid)
 
                 if isinstance(o, torch.nn.Module):
                     mods.append((prefix, o, _first_param_device(o)))
 
-                # scan attributes
+                # 收集待遍历的子对象（逆序入栈，保证遍历顺序一致）
+                to_push = []
                 for name in dir(o):
                     if name.startswith("__"):
                         continue
@@ -285,21 +289,21 @@ class SynthCityCTGANModel(_SynthCityModelBase):
                         v = getattr(o, name)
                     except Exception:
                         continue
-                    # avoid huge collections
                     if isinstance(v, (int, float, str, bytes, bool, type(None))):
                         continue
                     if isinstance(v, dict):
-                        # scan a few items
                         for k2, v2 in list(v.items())[:20]:
-                            rec(v2, f"{prefix}.{name}[{k2}]")
+                            to_push.append((f"{prefix}.{name}[{k2}]", v2))
                         continue
                     if isinstance(v, (list, tuple)):
                         for i2, v2 in enumerate(list(v)[:20]):
-                            rec(v2, f"{prefix}.{name}[{i2}]")
+                            to_push.append((f"{prefix}.{name}[{i2}]", v2))
                         continue
-                    rec(v, f"{prefix}.{name}")
+                    to_push.append((f"{prefix}.{name}", v))
 
-            rec(root_obj)
+                for item in reversed(to_push):
+                    stack.append(item)
+
             return mods
 
         print("=== [DEEP-SCAN] after plugin.fit start (sleep 10s) ===", flush=True)
