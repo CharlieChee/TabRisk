@@ -300,6 +300,18 @@ def main(cfg: DictConfig) -> None:
     logger.info("=" * 60)
     logger.info("步骤 4: 训练模型")
     logger.info("=" * 60)
+    # 在训练前，将 pandas 的 string/object 列统一转换为 category，
+    # 以避免下游 Schema 验证在遇到 pandas StringDtype 时出错
+    string_cols = df.select_dtypes(include=["string"]).columns
+    if len(string_cols) > 0:
+        logger.info(f"检测到 {len(string_cols)} 个 string dtype 列，转换为 category: {list(string_cols)}")
+        df[string_cols] = df[string_cols].astype("category")
+
+    object_cols = df.select_dtypes(include=["object"]).columns
+    if len(object_cols) > 0:
+        logger.info(f"检测到 {len(object_cols)} 个 object dtype 列，转换为 category: {list(object_cols)}")
+        df[object_cols] = df[object_cols].astype("category")
+
     model.fit(df, schema)
 
     # 步骤 5: 保存可序列化产物（禁止 pickle plugin，SynthCity 不保证 pickle-safe）
