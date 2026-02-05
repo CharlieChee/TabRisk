@@ -10,16 +10,58 @@ backend, keeping the same fit/sample interface and schema usage.
 
 from __future__ import annotations
 
+import inspect
+import os
 from pathlib import Path
 from typing import Any, Dict, Optional
 
 import pandas as pd
+import torch
 from loguru import logger
 
 from synthgen.data.schema import Schema
 from synthgen.models.base import BaseModel
 from synthgen.synthetic_backend import SYNTHCITY_GENERATORS, create_plugin
 from synthgen.utils.conversion import to_dataframe
+
+
+def _get_synthcity_plugin_class(name: str) -> Optional[type]:
+    """获取 SynthCity 插件类（用于 inspect 构造参数）。"""
+    try:
+        from synthcity.plugins import Plugins
+        plugins = Plugins()
+        if hasattr(plugins, "plugins") and isinstance(getattr(plugins, "plugins"), dict):
+            return plugins.plugins.get(name)
+        if hasattr(plugins, "_plugins") and isinstance(getattr(plugins, "_plugins"), dict):
+            return plugins._plugins.get(name)
+    except Exception:
+        pass
+    return None
+
+
+def _move_torch_modules_to_cuda(plugin: Any) -> None:
+    """在 plugin 内查找 torch.nn.Module（model/_model/net/generator/discriminator 等）并 .to('cuda')。"""
+    if plugin is None:
+        return
+    candidates = ("model", "_model", "net", "_net", "generator", "discriminator", "_generator", "_discriminator")
+    seen: set[int] = set()
+    for attr_name in candidates:
+        try:
+            child = getattr(plugin, attr_name, None)
+            if child is not None and id(child) not in seen and isinstance(child, torch.nn.Module):
+                seen.add(id(child))
+                child.to("cuda")
+                logger.info("moved %s to cuda", attr_name)
+        except Exception:
+            pass
+    try:
+        for attr_name, child in vars(plugin).items():
+            if child is not None and id(child) not in seen and isinstance(child, torch.nn.Module):
+                seen.add(id(child))
+                child.to("cuda")
+                logger.info("moved %s to cuda", attr_name)
+    except Exception:
+        pass
 
 
 class _SynthCityModelBase(BaseModel):
@@ -64,9 +106,27 @@ class _SynthCityModelBase(BaseModel):
         logger.info(f"开始训练 SynthCity {self.BACKEND_NAME} 模型...")
         logger.info(f"训练数据形状: {data.shape}, n_iter={self.n_iter}, batch_size={self.batch_size}")
         if self.BACKEND_NAME == "ctgan":
-            logger.info(f"CTGAN training device: {getattr(self._plugin, 'device', 'unknown')}")
+            logger.info(
+                "CTGAN GPU: torch.cuda.is_available()=%s, CUDA_VISIBLE_DEVICES=%s, plugin.device=%s",
+                torch.cuda.is_available(),
+                os.environ.get("CUDA_VISIBLE_DEVICES", "not set"),
+                getattr(self._plugin, "device", "unknown"),
+            )
+            try:
+                for attr in ("model", "_model", "generator", "discriminator"):
+                    m = getattr(self._plugin, attr, None)
+                    if m is not None and isinstance(m, torch.nn.Module) and hasattr(m, "parameters"):
+                        try:
+                            dev = next(m.parameters(), None)
+                            logger.info("CTGAN underlying %s device: %s", attr, dev.device if dev is not None else "N/A")
+                        except Exception:
+                            pass
+                        break
+            except Exception:
+                pass
+            _move_torch_modules_to_cuda(self._plugin)
             epochs = getattr(self._plugin, "epochs", self.n_iter)
-            logger.info(f"CTGAN epochs: {epochs}")
+            logger.info("CTGAN epochs: %s", epochs)
             logger.info("CTGAN training started...")
         self._plugin.fit(data)
         if self.BACKEND_NAME == "ctgan":
@@ -155,9 +215,23 @@ class SynthCityCTGANModel(_SynthCityModelBase):
         )
 
     def _plugin_params(self) -> Dict[str, Any]:
-        """CTGAN 强制使用 GPU，避免无日志的 CPU 训练。"""
+        """根据 CTGAN 构造函数签名自动探测并传入 GPU 参数（device/cuda/use_cuda/gpu）。"""
         params = super()._plugin_params()
-        params["device"] = "cuda"
+        plugin_cls = _get_synthcity_plugin_class("ctgan")
+        if plugin_cls is not None:
+            try:
+                sig = inspect.signature(plugin_cls.__init__)
+                allowed = set(sig.parameters.keys())
+                if "device" in allowed:
+                    params["device"] = "cuda:0"
+                elif "cuda" in allowed:
+                    params["cuda"] = True
+                elif "use_cuda" in allowed:
+                    params["use_cuda"] = True
+                elif "gpu" in allowed:
+                    params["gpu"] = True
+            except Exception:
+                pass
         return params
 
 

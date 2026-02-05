@@ -14,6 +14,7 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 import torch
+torch.set_num_threads(8)
 import hydra
 from omegaconf import DictConfig, OmegaConf
 from loguru import logger
