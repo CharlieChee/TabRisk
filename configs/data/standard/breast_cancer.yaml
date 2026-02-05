@@ -1,0 +1,10 @@
+# Breast Cancer Wisconsin (sklearn 内置，无需网络)
+# 使用方式: python -m synthgen.train data=standard/breast_cancer
+_target_: synthgen.data.load.load_dataset
+params:
+  source: sklearn
+  name: breast_cancer
+  split: null
+  target: null
+  cache_dir: data/cache
+  dropna: true

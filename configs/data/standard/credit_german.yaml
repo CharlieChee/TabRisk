@@ -1,0 +1,11 @@
+# German Credit (OpenML, credit-g)
+# 使用方式: python -m synthgen.train data=standard/credit_german
+_target_: synthgen.data.load.load_dataset
+params:
+  source: openml
+  name: credit-g
+  openml_id: 31
+  split: null
+  target: class
+  cache_dir: data/cache
+  dropna: true

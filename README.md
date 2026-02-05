@@ -69,21 +69,58 @@ python -m synthgen.train model=tvae
 python -m synthgen.train model=pategan
 ```
 
+### 标准数据集（开箱即用）
+
+除本地 CSV（`data=demo`）外，可用 `data=standard/<数据集>` 切换为公开基准数据（自动下载/缓存到 `data/cache`）：
+
+```bash
+# Adult（OpenML）
+python -m synthgen.train data=standard/adult_openml model=ctgan synthetic_rows=10000
+
+# Adult（HuggingFace）
+python -m synthgen.train data=standard/adult_hf model=ctgan synthetic_rows=10000
+
+# German Credit（OpenML）
+python -m synthgen.train data=standard/credit_german model=ctgan synthetic_rows=1000
+
+# Iris / Breast Cancer（sklearn 内置，无需网络，适合 CI/本地快速试跑）
+python -m synthgen.train data=standard/iris model=ctgan epochs=10 synthetic_rows=200
+python -m synthgen.train data=standard/breast_cancer model=ctgan epochs=10 synthetic_rows=200
+```
+
+配置文件在 `configs/data/standard/*.yaml`，训练流程不变，仍输出 `schema.json`、`synthetic.csv` 等。
+
 ### 生成合成数据
 
 合成数据在训练时通过 `synthetic_rows` 生成，输出至 `outputs/<run>/synthetic.csv`。  
 `sample` 命令依赖 model.pkl，而 **SynthCity plugin 不保证 pickle-safe**，本项目默认不序列化生成器对象，研究关注 **synthetic data** 与 **privacy**，而非模型复用。
 
-### 运行 Smoke Test
+### 测试
 
-Smoke test 会自动完成完整流程：生成演示数据 → 训练模型 → 生成合成数据
+**单元 / Smoke 测试（推荐先跑，无需网络）：**
 
 ```bash
-# 使用脚本（推荐）
-bash scripts/smoke_test.sh
-
-# 或使用 pytest
+# 运行全部 pytest（含 schema、模型、端到端）
 pytest tests/test_smoke.py -v
+
+# 或使用脚本：会先生成 demo CSV，再跑上述测试
+bash scripts/smoke_test.sh
+```
+
+**用内置数据快速验证训练流程（无需网络、不依赖 make_demo_data）：**
+
+```bash
+# 用 sklearn iris 跑一遍训练 + 生成合成数据（约 1 分钟内）
+python -m synthgen.train data=standard/iris model=ctgan epochs=5 synthetic_rows=100 output_dir=outputs/smoke_iris
+# 检查输出
+ls outputs/smoke_iris/schema.json outputs/smoke_iris/synthetic.csv
+```
+
+**需要网络时的标准数据集试跑：**
+
+```bash
+# 首次会下载并缓存到 data/cache，之后复用缓存
+python -m synthgen.train data=standard/adult_openml model=ctgan epochs=2 synthetic_rows=500
 ```
 
 ## 项目结构

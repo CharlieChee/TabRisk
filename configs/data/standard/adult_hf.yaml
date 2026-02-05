@@ -1,0 +1,10 @@
+# Adult Census Income (HuggingFace)
+# 使用方式: python -m synthgen.train data=standard/adult_hf
+_target_: synthgen.data.load.load_dataset
+params:
+  source: hf
+  name: scikit-learn/adult-census-income
+  split: train
+  target: income
+  cache_dir: data/cache
+  dropna: true

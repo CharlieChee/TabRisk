@@ -11,7 +11,7 @@ from loguru import logger
 from rich.console import Console
 from rich.table import Table
 
-from synthgen.data.load import load_csv
+from synthgen.data.load import load_csv, load_dataset
 from synthgen.data.schema import infer_schema
 from synthgen.models.base import BaseModel
 
@@ -69,13 +69,13 @@ def instantiate_model(cfg: DictConfig) -> BaseModel:
 
 
 def instantiate_data_loader(cfg: DictConfig, project_root: Path) -> pd.DataFrame:
-    """实例化数据加载器并加载数据。"""
+    """实例化数据加载器并加载数据（支持 load_csv 与 load_dataset）。"""
     data_cfg = cfg.data
     if "_target_" not in data_cfg:
         raise ValueError("数据配置中缺少 _target_ 字段")
 
     target = data_cfg._target_
-    params = data_cfg.get("params", {}).copy()
+    params = dict(OmegaConf.to_container(data_cfg.get("params", {}), resolve=True) or {})
 
     # 处理文件路径（如果是相对路径，则相对于项目根目录）
     if "file_path" in params:
@@ -83,11 +83,20 @@ def instantiate_data_loader(cfg: DictConfig, project_root: Path) -> pd.DataFrame
         if not file_path.is_absolute():
             params["file_path"] = str(project_root / file_path)
 
-    # 动态导入并调用
+    # 标准数据集 load_dataset：将 cache_dir 解析为绝对路径并注入 project_root
+    if "source" in params:
+        if "cache_dir" in params and params["cache_dir"]:
+            cache = Path(params["cache_dir"])
+            if not cache.is_absolute():
+                params["cache_dir"] = str(project_root / cache)
+        params.setdefault("project_root", str(project_root))
+        logger.info(f"加载数据: {target} (source={params.get('source')}, name={params.get('name')})")
+        return load_dataset(**params)
+
+    # 动态导入并调用（如 load_csv）
     module_path, func_name = target.rsplit(".", 1)
     module = __import__(module_path, fromlist=[func_name])
     load_func = getattr(module, func_name)
-
     logger.info(f"加载数据: {target}")
     return load_func(**params)
 

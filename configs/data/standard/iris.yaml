@@ -1,0 +1,10 @@
+# Iris (sklearn 内置，无需网络，适合 CI/smoke)
+# 使用方式: python -m synthgen.train data=standard/iris
+_target_: synthgen.data.load.load_dataset
+params:
+  source: sklearn
+  name: iris
+  split: null
+  target: null
+  cache_dir: data/cache
+  dropna: true
