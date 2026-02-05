@@ -250,6 +250,78 @@ class SynthCityCTGANModel(_SynthCityModelBase):
             **kwargs,
         )
 
+    def fit(self, data: pd.DataFrame, schema: Schema) -> None:
+        """仅在 CTGAN 训练完成后做一次深度扫描打印，不改训练逻辑/参数/数据。"""
+        # 先按原逻辑完成训练
+        super().fit(data, schema)
+
+        import time
+        import torch
+
+        def _first_param_device(m):
+            try:
+                return str(next(m.parameters()).device)
+            except Exception:
+                return "no-params"
+
+        def _scan_modules(root_obj):
+            mods = []
+            seen = set()
+
+            def rec(o, prefix="root"):
+                oid = id(o)
+                if oid in seen:
+                    return
+                seen.add(oid)
+
+                if isinstance(o, torch.nn.Module):
+                    mods.append((prefix, o, _first_param_device(o)))
+
+                # scan attributes
+                for name in dir(o):
+                    if name.startswith("__"):
+                        continue
+                    try:
+                        v = getattr(o, name)
+                    except Exception:
+                        continue
+                    # avoid huge collections
+                    if isinstance(v, (int, float, str, bytes, bool, type(None))):
+                        continue
+                    if isinstance(v, dict):
+                        # scan a few items
+                        for k2, v2 in list(v.items())[:20]:
+                            rec(v2, f"{prefix}.{name}[{k2}]")
+                        continue
+                    if isinstance(v, (list, tuple)):
+                        for i2, v2 in enumerate(list(v)[:20]):
+                            rec(v2, f"{prefix}.{name}[{i2}]")
+                        continue
+                    rec(v, f"{prefix}.{name}")
+
+            rec(root_obj)
+            return mods
+
+        print("=== [DEEP-SCAN] after plugin.fit start (sleep 10s) ===", flush=True)
+        print("plugin type:", type(self._plugin), flush=True)
+        print("plugin.device attr:", getattr(self._plugin, "device", None), flush=True)
+
+        time.sleep(10)
+
+        # direct model check
+        m = getattr(self._plugin, "model", None)
+        print("plugin.model:", type(m), flush=True)
+        if isinstance(m, torch.nn.Module):
+            print("plugin.model first_param_device:", _first_param_device(m), flush=True)
+        else:
+            print("plugin.model is not torch.nn.Module", flush=True)
+
+        mods = _scan_modules(self._plugin)
+        print(f"[DEEP-SCAN] found {len(mods)} torch.nn.Module(s)", flush=True)
+        for path, mod, dev in mods[:30]:
+            print(f"  - {path}: {type(mod)} first_param_device={dev}", flush=True)
+        print("=== [DEEP-SCAN] end ===", flush=True)
+
     def _plugin_params(self) -> Dict[str, Any]:
         """从配置读 device；当 device=cuda 且 torch.cuda.is_available() 时传 device='cuda' 给插件。"""
         params = super()._plugin_params()
