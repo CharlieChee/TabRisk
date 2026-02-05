@@ -264,14 +264,15 @@ class SynthCityCTGANModel(_SynthCityModelBase):
             except Exception:
                 return "no-params"
 
-        def _scan_modules(root_obj):
+        def _scan_modules(root_obj, max_objects=15000, max_depth=25):
             mods = []
             seen = set()
-            # 使用显式栈替代递归，避免深层对象图导致 RecursionError
-            stack = [("root", root_obj)]
+            stack = [("root", root_obj, 0)]  # (prefix, obj, depth)
 
-            while stack:
-                prefix, o = stack.pop()
+            while stack and len(seen) < max_objects:
+                prefix, o, depth = stack.pop()
+                if depth > max_depth:
+                    continue
                 oid = id(o)
                 if oid in seen:
                     continue
@@ -280,7 +281,6 @@ class SynthCityCTGANModel(_SynthCityModelBase):
                 if isinstance(o, torch.nn.Module):
                     mods.append((prefix, o, _first_param_device(o)))
 
-                # 收集待遍历的子对象（逆序入栈，保证遍历顺序一致）
                 to_push = []
                 for name in dir(o):
                     if name.startswith("__"):
@@ -293,13 +293,13 @@ class SynthCityCTGANModel(_SynthCityModelBase):
                         continue
                     if isinstance(v, dict):
                         for k2, v2 in list(v.items())[:20]:
-                            to_push.append((f"{prefix}.{name}[{k2}]", v2))
+                            to_push.append((f"{prefix}.{name}[{k2}]", v2, depth + 1))
                         continue
                     if isinstance(v, (list, tuple)):
                         for i2, v2 in enumerate(list(v)[:20]):
-                            to_push.append((f"{prefix}.{name}[{i2}]", v2))
+                            to_push.append((f"{prefix}.{name}[{i2}]", v2, depth + 1))
                         continue
-                    to_push.append((f"{prefix}.{name}", v))
+                    to_push.append((f"{prefix}.{name}", v, depth + 1))
 
                 for item in reversed(to_push):
                     stack.append(item)
@@ -320,7 +320,9 @@ class SynthCityCTGANModel(_SynthCityModelBase):
         else:
             print("plugin.model is not torch.nn.Module", flush=True)
 
-        mods = _scan_modules(self._plugin)
+        # 只扫描 plugin.model（nn.Module 树），避免从 plugin 根扫描导致对象图过大而卡住
+        scan_root = m if isinstance(m, torch.nn.Module) else self._plugin
+        mods = _scan_modules(scan_root)
         print(f"[DEEP-SCAN] found {len(mods)} torch.nn.Module(s)", flush=True)
         for path, mod, dev in mods[:30]:
             print(f"  - {path}: {type(mod)} first_param_device={dev}", flush=True)
