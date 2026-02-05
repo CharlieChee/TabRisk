@@ -242,6 +242,11 @@ def main(cfg: DictConfig) -> None:
     (output_dir / "random_seed.txt").write_text(str(cfg.seed), encoding="utf-8")
     logger.info(f"随机种子已保存: {output_dir / 'random_seed.txt'}")
 
+    # 保存原始训练数据集（抽样后的 df）
+    original_path = output_dir / "original.csv"
+    df.to_csv(original_path, index=False)
+    logger.info(f"原始训练数据已保存: {original_path} ({len(df)} 行)")
+
     # 按 save_model 模式保存元数据（不 pickle plugin）
     save_mode = getattr(cfg, "save_model", False) or False
     if save_mode == "metadata_only":
@@ -269,6 +274,7 @@ def main(cfg: DictConfig) -> None:
     console.print(f"[bold green]训练完成！[/bold green]")
     console.print(f"Schema: {output_dir / 'schema.json'}")
     console.print(f"配置: {run_config_path}")
+    console.print(f"原始训练数据: {output_dir / 'original.csv'} ({len(df)} 行)")
     if synthetic_rows > 0:
         console.print(f"合成数据: {output_dir / 'synthetic.csv'} ({synthetic_rows} 行)")
 
