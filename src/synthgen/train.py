@@ -183,6 +183,13 @@ def main(cfg: DictConfig) -> None:
     df = instantiate_data_loader(cfg, project_root)
     logger.info(f"数据形状: {df.shape}")
 
+    # 训练数据抽样：若配置了 train_rows > 0，则随机抽取 n 条参与训练
+    train_rows = getattr(cfg, "train_rows", None)
+    if train_rows is not None and int(train_rows) > 0:
+        n_sample = min(int(train_rows), len(df))
+        df = df.sample(n=n_sample, random_state=cfg.seed).reset_index(drop=True)
+        logger.info(f"已随机抽样 {n_sample} 条数据用于训练（train_rows={train_rows}）")
+
     # 推断 schema
     logger.info("=" * 60)
     logger.info("步骤 2: 推断 schema")

@@ -11,6 +11,8 @@ output_dir: outputs/train_${now:%Y%m%d_%H%M%S}
 epochs: 300
 batch_size: 500
 verbose: true
+# 训练时使用的数据行数：null/0 表示使用全部数据；设为正整数（如 2000）则随机抽样该条数参与训练
+train_rows: null
 
 # 保存与输出
 # save_model: false（默认）不保存模型对象；metadata_only 只保存 plugin name + params（用于重建参考）
