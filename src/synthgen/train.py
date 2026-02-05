@@ -2,53 +2,11 @@
 
 import os
 import sys
-
-os.environ.setdefault("OMP_NUM_THREADS", "8")
-os.environ.setdefault("MKL_NUM_THREADS", "8")
-os.environ.setdefault("NUMEXPR_NUM_THREADS", "8")
-os.environ.setdefault("USE_TORCH", "1")
-os.environ.setdefault("TRANSFORMERS_NO_TORCH_WARNING", "1")
-
-# 必须在 import torch 前绑定 CUDA_VISIBLE_DEVICES（命令行 override 优先生效）
-for arg in sys.argv:
-    if arg.startswith("model.gpu_id=") or arg.startswith("model.params.gpu_id="):
-        _, val = arg.split("=", 1)
-        if val.strip() and val.lower() not in ("null", "none", ""):
-            os.environ["CUDA_VISIBLE_DEVICES"] = val.strip()
-        break
-    if arg.startswith("runtime.gpu_id="):
-        _, val = arg.split("=", 1)
-        if val.strip() and val.lower() not in ("null", "none", ""):
-            os.environ["CUDA_VISIBLE_DEVICES"] = val.strip()
-        break
-
-
-def _maybe_set_cuda_visible_devices(cfg) -> None:
-    """从 cfg.model.gpu_id 或 cfg.runtime.gpu_id 设置 CUDA_VISIBLE_DEVICES（main 内尽早调用）。"""
-    gpu_id = None
-    try:
-        gpu_id = cfg.model.get("gpu_id", None)
-    except Exception:
-        pass
-    if gpu_id is None:
-        try:
-            if hasattr(cfg.model, "params") and cfg.model.params is not None:
-                gpu_id = cfg.model.params.get("gpu_id", None)
-        except Exception:
-            pass
-    if gpu_id is None:
-        try:
-            gpu_id = cfg.runtime.get("gpu_id", None)
-        except Exception:
-            pass
-    if gpu_id is not None:
-        os.environ["CUDA_VISIBLE_DEVICES"] = str(gpu_id)
 import random
 from pathlib import Path
+
 import numpy as np
 import pandas as pd
-import torch
-torch.set_num_threads(8)
 import hydra
 from omegaconf import DictConfig, OmegaConf
 from loguru import logger
@@ -56,11 +14,28 @@ from rich.console import Console
 from rich.table import Table
 
 from synthgen.data.load import load_csv, load_dataset
-
-print("torch:", torch.__version__, "cuda:", torch.version.cuda, "cuda_available:", torch.cuda.is_available())
-print("device_count:", torch.cuda.device_count(), "current:", torch.cuda.current_device() if torch.cuda.is_available() else None)
 from synthgen.data.schema import infer_schema
 from synthgen.models.base import BaseModel
+
+
+# 限制 CPU 线程数，避免多用户环境下过度占用
+os.environ.setdefault("OMP_NUM_THREADS", "8")
+os.environ.setdefault("MKL_NUM_THREADS", "8")
+os.environ.setdefault("NUMEXPR_NUM_THREADS", "8")
+os.environ.setdefault("USE_TORCH", "1")
+os.environ.setdefault("TRANSFORMERS_NO_TORCH_WARNING", "1")
+
+
+def _maybe_set_cuda_visible_devices_from_cfg(cfg: DictConfig) -> None:
+    """从 cfg.model.params.gpu_id 读取并设置 CUDA_VISIBLE_DEVICES（仅使用 model.params）。"""
+    gpu_id = None
+    try:
+        if hasattr(cfg.model, "params") and cfg.model.params is not None:
+            gpu_id = cfg.model.params.get("gpu_id", None)
+    except Exception:
+        gpu_id = None
+    if gpu_id is not None:
+        os.environ["CUDA_VISIBLE_DEVICES"] = str(gpu_id)
 
 # 获取项目根目录（configs/ 在项目根目录）
 # 当使用 python -m synthgen.train 时，工作目录是项目根目录
@@ -151,8 +126,22 @@ def instantiate_data_loader(cfg: DictConfig, project_root: Path) -> pd.DataFrame
 @hydra.main(version_base=None, config_path=str(CONFIG_DIR), config_name="train")
 def main(cfg: DictConfig) -> None:
     """训练主函数。"""
-    _maybe_set_cuda_visible_devices(cfg)
+
+    # 在导入 torch / 创建 SynthCity 插件前，根据 cfg.model.params.gpu_id 绑定 CUDA_VISIBLE_DEVICES
+    _maybe_set_cuda_visible_devices_from_cfg(cfg)
+
+    import torch  # 延迟导入，确保上面的环境变量已生效
+
+    # 限制 torch CPU 线程数，避免 CPU 线程爆炸
+    torch.set_num_threads(8)
+
     logger.info("CUDA_VISIBLE_DEVICES=%s", os.environ.get("CUDA_VISIBLE_DEVICES", "not set"))
+    logger.info(
+        "torch=%s, cuda_available=%s, device_count=%s",
+        torch.__version__,
+        torch.cuda.is_available(),
+        torch.cuda.device_count(),
+    )
 
     console = Console()
 
