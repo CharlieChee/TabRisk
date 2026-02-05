@@ -40,7 +40,8 @@ def run_synthcity_eval(
     metrics: Dict[str, Any] = {}
     details: Dict[str, Any] = {}
 
-    # 统计指标
+    # 统计指标：优先使用 synthcity.metrics.eval_statistical，失败则使用 scipy/pandas fallback
+    stats_used_synthcity = False
     try:
         from synthcity.metrics import eval_statistical
         # synthcity 常见 API: eval_statistical(X_gt, X_syn) 或 (real_data, synthetic_data)
@@ -56,9 +57,15 @@ def run_synthcity_eval(
                 metrics[f"stats_{k}"] = v if isinstance(v, (int, float)) else str(v)
         else:
             metrics["stats_score"] = float(res) if res is not None else None
+        stats_used_synthcity = True
     except Exception as e:
-        metrics["stats_error"] = str(e)
-        details["stats_error"] = str(e)
+        # 记录 synthcity 报错信息，但不直接失败，后续用 fallback 实现 ks/wasserstein/corr
+        details["stats_synthcity_error"] = str(e)
+
+    if not stats_used_synthcity:
+        _fallback_statistical_metrics(
+            original_df, synthetic_df, schema, stats_list, metrics, details
+        )
 
     # 效用：Train on synthetic / Test on real（优先 synthcity.eval_performance，否则自实现）
     if target_col and task_type and target_col in original_df.columns and target_col in synthetic_df.columns:
@@ -88,6 +95,77 @@ def run_synthcity_eval(
             )
 
     return metrics, details if details else None
+
+
+def _fallback_statistical_metrics(
+    original_df: pd.DataFrame,
+    synthetic_df: pd.DataFrame,
+    schema: Schema,
+    stats_list: List[str],
+    metrics: Dict[str, Any],
+    details: Dict[str, Any],
+) -> None:
+    """
+    当 SynthCity 统计评估不可用（例如受 pydantic 版本影响）时，
+    使用 scipy / pandas 计算简单的 ks / wasserstein / corr 作为兜底统计指标。
+    """
+    import numpy as np
+    from scipy.stats import ks_2samp, wasserstein_distance
+
+    # 仅在两边都存在的列上计算
+    cols = [c for c in original_df.columns if c in synthetic_df.columns]
+    # 优先连续列；若 schema 没有标注，则退回所有列
+    num_cols = [c for c in cols if c in schema.continuous_columns]
+    if not num_cols:
+        num_cols = cols
+
+    ks_values = []
+    ws_values = []
+    corr_values = []
+
+    for col in num_cols:
+        s_real = original_df[col]
+        s_syn = synthetic_df[col]
+        # 尽量转为数值型
+        real = pd.to_numeric(s_real, errors="coerce")
+        syn = pd.to_numeric(s_syn, errors="coerce")
+        mask = real.notna() & syn.notna()
+        real = real[mask]
+        syn = syn[mask]
+        if len(real) < 2 or len(syn) < 2:
+            continue
+
+        if "ks" in stats_list:
+            try:
+                stat, _ = ks_2samp(real, syn)
+                metrics[f"stats_ks_{col}"] = float(stat)
+                ks_values.append(stat)
+            except Exception:
+                pass
+
+        if "wasserstein" in stats_list:
+            try:
+                w = wasserstein_distance(real, syn)
+                metrics[f"stats_wasserstein_{col}"] = float(w)
+                ws_values.append(w)
+            except Exception:
+                pass
+
+        if "corr" in stats_list:
+            try:
+                c = float(pd.Series(real).corr(pd.Series(syn)))
+                if not np.isnan(c):
+                    metrics[f"stats_corr_{col}"] = c
+                    corr_values.append(c)
+            except Exception:
+                pass
+
+    if ks_values:
+        metrics["stats_ks_mean"] = float(np.mean(ks_values))
+    if ws_values:
+        metrics["stats_wasserstein_mean"] = float(np.mean(ws_values))
+    if corr_values:
+        metrics["stats_corr_mean"] = float(np.mean(corr_values))
 
 
 def _utility_train_synth_test_real(
