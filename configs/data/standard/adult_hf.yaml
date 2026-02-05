@@ -1,4 +1,4 @@
-# Adult Census Income (HuggingFace)
+# Adult Census Income (HuggingFace)，默认走国内镜像 hf-mirror.com
 # 使用方式: python -m synthgen.train data=standard/adult_hf
 _target_: synthgen.data.load.load_dataset
 params:
@@ -8,3 +8,4 @@ params:
   target: income
   cache_dir: data/cache
   dropna: true
+  # hf_mirror: https://hf-mirror.com   # 默认已启用，无需配置；禁用镜像可设 hf_mirror=null

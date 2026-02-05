@@ -1,9 +1,13 @@
 """数据加载：CSV 与标准数据集（OpenML / HF / SDV demo / sklearn）统一入口。"""
 
+import os
 from pathlib import Path
 from typing import Any, Optional
 
 import pandas as pd
+
+# HuggingFace 国内镜像，便于在中国网络环境下下载
+HF_MIRROR_DEFAULT = "https://hf-mirror.com"
 
 
 def load_csv(file_path: str, **kwargs) -> pd.DataFrame:
@@ -91,13 +95,20 @@ def _load_hf(
     name: str,
     split: Optional[str] = None,
     cache_dir: Optional[str] = None,
+    hf_mirror: Optional[str] = HF_MIRROR_DEFAULT,
     **kwargs: Any,
 ) -> pd.DataFrame:
-    """从 HuggingFace Datasets 加载，转成 pandas，缓存到 cache_dir。"""
+    """从 HuggingFace Datasets 加载，转成 pandas，缓存到 cache_dir。
+    在国内网络下默认使用 HF 镜像（hf_mirror），可通过配置或环境变量 HF_ENDPOINT 覆盖。
+    """
     try:
         from datasets import load_dataset
     except ImportError as e:
         raise ImportError("HF 数据源需要安装 datasets: pip install datasets") from e
+
+    # 国内镜像：若未设置 HF_ENDPOINT 且指定了 hf_mirror，则使用镜像下载
+    if hf_mirror and "HF_ENDPOINT" not in os.environ:
+        os.environ["HF_ENDPOINT"] = hf_mirror.rstrip("/")
 
     cache_path = _ensure_cache_dir(cache_dir)
     hf_cache = str(cache_path / "hf")
@@ -179,17 +190,19 @@ def load_dataset(
     cache_dir: Optional[str] = None,
     dropna: bool = True,
     project_root: Optional[str] = None,
+    hf_mirror: Optional[str] = HF_MIRROR_DEFAULT,
     **kwargs: Any,
 ) -> pd.DataFrame:
     """
     统一数据入口：根据 source 从 OpenML / HF / SDV demo / sklearn 加载，返回单表 DataFrame。
 
     - source=openml: sklearn.datasets.fetch_openml，缓存到 cache_dir/openml
-    - source=hf: datasets.load_dataset，缓存到 cache_dir/hf
+    - source=hf: datasets.load_dataset，缓存到 cache_dir/hf（默认使用国内镜像 hf-mirror.com）
     - source=sdv_demo: sdv.datasets.demo.load_demo
     - source=sklearn: load_iris / load_breast_cancer 等（无需网络）
 
     自动将分类列转为 string/category，支持 dropna；返回的 df 可直接用于 schema 推断与训练。
+    hf_mirror: HF 镜像地址，仅 source=hf 时生效；设为 null 则使用环境变量 HF_ENDPOINT（若有）。
     """
     if project_root and cache_dir and not Path(cache_dir).is_absolute():
         cache_dir = str(Path(project_root) / cache_dir)
@@ -197,7 +210,7 @@ def load_dataset(
     if source == "openml":
         df = _load_openml(name=name, openml_id=openml_id, split=split, cache_dir=cache_dir, **kwargs)
     elif source == "hf":
-        df = _load_hf(name=name, split=split, cache_dir=cache_dir, **kwargs)
+        df = _load_hf(name=name, split=split, cache_dir=cache_dir, hf_mirror=hf_mirror, **kwargs)
     elif source == "sdv_demo":
         df = _load_sdv_demo(name=name, cache_dir=cache_dir, **kwargs)
     elif source == "sklearn":
