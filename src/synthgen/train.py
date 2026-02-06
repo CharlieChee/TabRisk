@@ -1,5 +1,6 @@
 """Training entry point."""
 
+import json
 import os
 import sys
 import random
@@ -17,6 +18,7 @@ from rich.table import Table
 from synthgen.data.load import load_csv, load_dataset
 from synthgen.data.schema import infer_schema
 from synthgen.models.base import BaseModel
+from synthgen.preprocess import get_preprocessor
 
 
 # 限制 CPU 线程数，避免多用户环境下过度占用
@@ -265,11 +267,20 @@ def main(cfg: DictConfig) -> None:
         df = df.sample(n=n_sample, random_state=cfg.seed).reset_index(drop=True)
         logger.info(f"已随机抽样 {n_sample} 条数据用于训练（train_rows={train_rows}）")
 
-    # 推断 schema
+    # 预处理（fit_transform 在 schema 推断 / 模型 fit 之前）
+    preproc_cfg = getattr(cfg, "preprocess", None) or OmegaConf.create({"name": "none", "params": {}})
+    preproc = get_preprocessor(
+        OmegaConf.select(preproc_cfg, "name", default="none"),
+        OmegaConf.to_container(preproc_cfg.get("params", {}), resolve=True),
+    )
+    train_df = preproc.fit_transform(df)
+    logger.info(f"预处理: {preproc.state_dict()['name']}, 训练数据形状: {train_df.shape}")
+
+    # 推断 schema（使用 transform 后的 df，__is_zero 等新列会进入 schema）
     logger.info("=" * 60)
     logger.info("步骤 2: 推断 schema")
     logger.info("=" * 60)
-    schema = infer_schema(df)
+    schema = infer_schema(train_df)
     schema.save(str(output_dir / "schema.json"))
 
     # 显示 schema 信息
@@ -302,17 +313,17 @@ def main(cfg: DictConfig) -> None:
     logger.info("=" * 60)
     # 在训练前，将 pandas 的 string/object 列统一转换为 category，
     # 以避免下游 Schema 验证在遇到 pandas StringDtype 时出错
-    string_cols = df.select_dtypes(include=["string"]).columns
+    string_cols = train_df.select_dtypes(include=["string"]).columns
     if len(string_cols) > 0:
         logger.info(f"检测到 {len(string_cols)} 个 string dtype 列，转换为 category: {list(string_cols)}")
-        df[string_cols] = df[string_cols].astype("category")
+        train_df[string_cols] = train_df[string_cols].astype("category")
 
-    object_cols = df.select_dtypes(include=["object"]).columns
+    object_cols = train_df.select_dtypes(include=["object"]).columns
     if len(object_cols) > 0:
         logger.info(f"检测到 {len(object_cols)} 个 object dtype 列，转换为 category: {list(object_cols)}")
-        df[object_cols] = df[object_cols].astype("category")
+        train_df[object_cols] = train_df[object_cols].astype("category")
 
-    model.fit(df, schema)
+    model.fit(train_df, schema)
 
     # 步骤 5: 保存可序列化产物（禁止 pickle plugin，SynthCity 不保证 pickle-safe）
     logger.info("=" * 60)
@@ -329,10 +340,16 @@ def main(cfg: DictConfig) -> None:
     (output_dir / "random_seed.txt").write_text(str(cfg.seed), encoding="utf-8")
     logger.info(f"随机种子已保存: {output_dir / 'random_seed.txt'}")
 
-    # 保存原始训练数据集（抽样后的 df）
+    # 保存原始训练数据集（抽样后的 df，未 transform）
     original_path = output_dir / "original.csv"
     df.to_csv(original_path, index=False)
     logger.info(f"原始训练数据已保存: {original_path} ({len(df)} 行)")
+
+    # 保存预处理规则（便于复现）
+    preprocess_path = output_dir / "preprocess.json"
+    with open(preprocess_path, "w", encoding="utf-8") as f:
+        json.dump(preproc.state_dict(), f, ensure_ascii=False, indent=2)
+    logger.info(f"预处理规则已保存: {preprocess_path}")
 
     # 按 save_model 模式保存元数据（不 pickle plugin）
     save_mode = getattr(cfg, "save_model", False) or False
@@ -344,6 +361,7 @@ def main(cfg: DictConfig) -> None:
     synthetic_rows = int(getattr(cfg, "synthetic_rows", 0) or 0)
     if synthetic_rows > 0:
         synthetic_df = model.sample(synthetic_rows)
+        synthetic_df = preproc.inverse_transform(synthetic_df)
         synthetic_path = output_dir / "synthetic.csv"
         synthetic_df.to_csv(synthetic_path, index=False)
         logger.info(f"合成数据已生成: {synthetic_path} ({synthetic_rows} 行)")

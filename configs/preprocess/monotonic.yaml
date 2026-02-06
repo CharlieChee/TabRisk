@@ -1,0 +1,8 @@
+# 单调变换预处理：log1p、zero_hurdle
+name: monotonic
+params:
+  zero_hurdle_cols:
+    - capital-gain
+    - capital-loss
+  log1p_cols: []
+  indicator_suffix: "__is_zero"

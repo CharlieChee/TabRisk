@@ -1,6 +1,7 @@
 defaults:
   - model: ctgan
   - data: demo
+  - preprocess: none
   - _self_
 
 # 训练配置
