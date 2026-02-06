@@ -1,0 +1,3 @@
+# 执行命令汇总（可随时增删改）
+
+CUDA_VISIBLE_DEVICES=7 python -m synthgen.train   data=standard/adult_openml   model=ctgan   model.params.device=cuda preprocess=monotonic   train_rows=2000   synthetic_rows=2000   model.params.n_iter=300   model.params.batch_size=1024
