@@ -122,6 +122,38 @@ def create_plugin(
     params.pop("gpu_id", None)
     params.pop("cuda_visible_devices", None)
 
+    # 仅对 ddpm（以及别名 tabddpm）将字符串 device 转为 torch.device，外部 CLI 仍然用字符串
+    if plugin_name == "ddpm" and isinstance(params.get("device"), str):
+        try:
+            import torch
+        except ImportError as e:  # pragma: no cover - 环境异常时直接抛出
+            raise ImportError(
+                "使用 ddpm 插件需要已安装 torch，但当前无法导入 torch。"
+            ) from e
+
+        dev_str = params["device"].strip()
+        try:
+            if dev_str in {"cuda", "gpu"}:
+                if not torch.cuda.is_available():
+                    raise ValueError(
+                        "配置了 device=cuda/gpu，但当前环境未检测到可用的 CUDA 设备。"
+                    )
+                params["device"] = torch.device("cuda")
+            elif dev_str.startswith("cuda:"):
+                params["device"] = torch.device(dev_str)
+            elif dev_str == "cpu":
+                params["device"] = torch.device("cpu")
+            else:
+                # 兜底：直接交给 torch.device 解析，例如 "mps" 等
+                params["device"] = torch.device(dev_str)
+        except Exception as e:
+            raise ValueError(
+                f"无效的 ddpm device 配置: {dev_str!r}。"
+                "请使用 cpu / cuda / cuda:0 等合法字符串，或检查当前环境的设备可用性。"
+            ) from e
+
+        logger.info("Using ddpm device: %s", params["device"])
+
     try:
         plugin = plugins.get(plugin_name, **params)
     except KeyError as e:
