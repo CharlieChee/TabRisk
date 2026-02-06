@@ -32,6 +32,8 @@ def _get_local_cache_path(
         key = f"sdv_{name}"
     elif source == "sklearn":
         key = f"sklearn_{name}"
+    elif source == "url":
+        key = f"url_{name}"
     else:
         payload = f"{source}_{name}_{openml_id}_{split}"
         key = "cache_" + hashlib.md5(payload.encode()).hexdigest()[:12]
@@ -185,6 +187,11 @@ def _load_sdv_demo(
     raise ValueError("SDV load_demo 返回格式无法解析为单表 DataFrame")
 
 
+def _load_url(url: str, **kwargs: Any) -> pd.DataFrame:
+    """从 URL 加载 CSV（如 GitHub raw），用于 OpenML 等未收录的数据集。"""
+    return pd.read_csv(url, **kwargs)
+
+
 def _load_sklearn(
     name: str,
     **kwargs: Any,
@@ -232,6 +239,7 @@ def load_dataset(
     - source=hf: datasets.load_dataset，缓存到 cache_dir/hf（默认使用国内镜像 hf-mirror.com）
     - source=sdv_demo: sdv.datasets.demo.load_demo
     - source=sklearn: load_iris / load_breast_cancer 等（无需网络）
+    - source=url: 从 CSV 直链加载（需 params.url），用于 OpenML 未收录数据（如 law_school）
 
     自动将分类列转为 string/category，支持 dropna；返回的 df 可直接用于 schema 推断与训练。
     hf_mirror: HF 镜像地址，仅 source=hf 时生效；设为 null 则使用环境变量 HF_ENDPOINT（若有）。
@@ -261,8 +269,13 @@ def load_dataset(
         df = _load_sdv_demo(name=name, cache_dir=cache_dir, **kwargs)
     elif source == "sklearn":
         df = _load_sklearn(name=name, **kwargs)
+    elif source == "url":
+        url = kwargs.pop("url", None)
+        if not url:
+            raise ValueError("source=url 时必须在 data.params 中提供 url")
+        df = _load_url(url, **kwargs)
     else:
-        raise ValueError(f"不支持的 source: {source}，可选: openml | hf | sdv_demo | sklearn")
+        raise ValueError(f"不支持的 source: {source}，可选: openml | hf | sdv_demo | sklearn | url")
 
     # 下载后保存到本地缓存，便于下一次直接读取
     local_cache_path.parent.mkdir(parents=True, exist_ok=True)

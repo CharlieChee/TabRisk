@@ -21,12 +21,12 @@ CUDA_VISIBLE_DEVICES=7 python -m synthgen.train \
 
 # 领域常用基准（仅改 data= 即可）
 # Census: adult_openml | Marketing: bank | Finance: credit | Medical: diabetes | Insurance: insurance | Fairness: law_school / compas
-# CUDA_VISIBLE_DEVICES=7 python -m synthgen.train data=standard/adult_openml model=ctgan model.params.device=cuda preprocess=monotonic train_rows=2000 synthetic_rows=2000 model.params.n_iter=300 model.params.batch_size=1024
-# CUDA_VISIBLE_DEVICES=7 python -m synthgen.train data=standard/bank model=ctgan model.params.device=cuda preprocess=monotonic train_rows=2000 synthetic_rows=2000 model.params.n_iter=300 model.params.batch_size=1024
-# CUDA_VISIBLE_DEVICES=7 python -m synthgen.train data=standard/credit model=ctgan model.params.device=cuda preprocess=monotonic train_rows=2000 synthetic_rows=2000 model.params.n_iter=300 model.params.batch_size=1024
-# CUDA_VISIBLE_DEVICES=7 python -m synthgen.train data=standard/diabetes model=ctgan model.params.device=cuda preprocess=monotonic train_rows=2000 synthetic_rows=2000 model.params.n_iter=300 model.params.batch_size=1024
-# CUDA_VISIBLE_DEVICES=7 python -m synthgen.train data=standard/insurance model=ctgan model.params.device=cuda preprocess=monotonic train_rows=2000 synthetic_rows=2000 model.params.n_iter=300 model.params.batch_size=1024
-# CUDA_VISIBLE_DEVICES=7 python -m synthgen.train data=standard/law_school model=ctgan model.params.device=cuda preprocess=monotonic train_rows=2000 synthetic_rows=2000 model.params.n_iter=300 model.params.batch_size=1024
-# CUDA_VISIBLE_DEVICES=7 python -m synthgen.train data=standard/compas model=ctgan model.params.device=cuda preprocess=monotonic train_rows=2000 synthetic_rows=2000 model.params.n_iter=300 model.params.batch_size=1024
+CUDA_VISIBLE_DEVICES=7 python -m synthgen.train data=standard/adult_openml model=ctgan model.params.device=cuda preprocess=monotonic train_rows=2000 synthetic_rows=2000 model.params.n_iter=300 model.params.batch_size=1024
+CUDA_VISIBLE_DEVICES=7 python -m synthgen.train data=standard/bank model=ctgan model.params.device=cuda preprocess=monotonic train_rows=2000 synthetic_rows=2000 model.params.n_iter=300 model.params.batch_size=1024
+CUDA_VISIBLE_DEVICES=7 python -m synthgen.train data=standard/credit model=ctgan model.params.device=cuda preprocess=monotonic train_rows=2000 synthetic_rows=2000 model.params.n_iter=300 model.params.batch_size=1024
+CUDA_VISIBLE_DEVICES=7 python -m synthgen.train data=standard/diabetes model=ctgan model.params.device=cuda preprocess=monotonic train_rows=2000 synthetic_rows=2000 model.params.n_iter=300 model.params.batch_size=1024
+CUDA_VISIBLE_DEVICES=7 python -m synthgen.train data=standard/insurance model=ctgan model.params.device=cuda preprocess=monotonic train_rows=2000 synthetic_rows=2000 model.params.n_iter=300 model.params.batch_size=1024
+CUDA_VISIBLE_DEVICES=7 python -m synthgen.train data=standard/law_school model=ctgan model.params.device=cuda preprocess=monotonic train_rows=2000 synthetic_rows=2000 model.params.n_iter=300 model.params.batch_size=1024
+CUDA_VISIBLE_DEVICES=7 python -m synthgen.train data=standard/compas model=ctgan model.params.device=cuda preprocess=monotonic train_rows=2000 synthetic_rows=2000 model.params.n_iter=300 model.params.batch_size=1024
 
   

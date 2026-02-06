@@ -1,12 +1,11 @@
-# Law School 入学/通过（公平性常用），目标: ugpagt3
+# Law School 入学/通过（公平性常用），从 GitHub 直链 CSV 加载（OpenML 无此数据集）
 # 使用方式: python -m synthgen.train data=standard/law_school
+# 数据来源: LSAC bar passage study (damtharvey/law-school-dataset)，约 20800 行
 _target_: synthgen.data.load.load_dataset
 params:
-  source: openml
-  name: LawSchool
-  # openml_id 可在 openml.org 搜索 Law school 确认后填写，不填则按 name 拉取
-  openml_id: null
-  split: null
-  target: ugpagt3
+  source: url
+  name: law_school
+  url: https://raw.githubusercontent.com/damtharvey/law-school-dataset/main/law_dataset.csv
+  target: bar
   cache_dir: data/cache
   dropna: true
