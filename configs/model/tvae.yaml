@@ -6,5 +6,3 @@ params:
   n_iter: ${epochs}
   batch_size: ${batch_size}
   verbose: ${verbose}
-  n_layers_hidden: 2
-  n_units_hidden: 256
