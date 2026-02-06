@@ -320,6 +320,38 @@ class SynthCityPATEGANModel(_SynthCityModelBase):
         )
 
 
+class SynthCityTabDDPMModel(_SynthCityModelBase):
+    """基于 SynthCity 的 TabDDPM 生成模型（扩散模型）。"""
+
+    BACKEND_NAME = "tabddpm"
+
+    def __init__(
+        self,
+        random_state: int = 0,
+        n_iter: int = 300,
+        batch_size: int = 500,
+        verbose: bool = True,
+        **kwargs: Any,
+    ):
+        super().__init__(
+            random_state=random_state,
+            n_iter=n_iter,
+            batch_size=batch_size,
+            verbose=verbose,
+            **kwargs,
+        )
+
+    def _plugin_params(self) -> Dict[str, Any]:
+        """从配置读 device；与 CTGAN 一致，支持 cuda/cpu。"""
+        params = super()._plugin_params()
+        device = self.extra_kwargs.get("device", "cpu")
+        if device == "cuda" and torch.cuda.is_available():
+            params["device"] = "cuda"
+        else:
+            params["device"] = "cpu"
+        return params
+
+
 def load_synthcity_model(file_path: str) -> BaseModel:
     """已弃用：SynthCity plugin 不可 pickle 反序列化。"""
     raise NotImplementedError(

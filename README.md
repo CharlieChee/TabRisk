@@ -7,7 +7,7 @@
 ## 功能特性
 
 - 📊 自动推断 CSV 数据的 schema（分类/连续变量）
-- 🤖 使用 SynthCity 支持多种生成器：**CTGAN**、**TVAE**、**PATEGAN**
+- 🤖 使用 SynthCity 支持多种生成器：**CTGAN**、**TVAE**、**PATEGAN**、**TabDDPM**
 - 📦 封装 SynthCity 使用逻辑为独立模块（`synthetic_backend.py`），统一 generator 接口
 - 💾 保存 schema、配置、元数据；训练完成后立即生成合成数据
 - 🎲 合成数据与训练配置、随机种子一并输出
@@ -67,7 +67,18 @@ python -m synthgen.train model=tvae
 
 # 使用 PATEGAN（隐私友好）
 python -m synthgen.train model=pategan
+
+# 使用 TabDDPM（扩散模型，首次可能稍慢，输出与其他模型一致的 schema/config/合成数据）
+python -m synthgen.train model=tabddpm
 ```
+
+**TabDDPM 最小可复现示例（与其他模型同样的 outputs 目录与 artifacts）：**
+
+```bash
+CUDA_VISIBLE_DEVICES=0 python -m synthgen.train data=standard/adult_openml model=tabddpm model.params.device=cuda train_rows=5000 synthetic_rows=5000
+```
+
+TabDDPM 第一次训练可能稍慢，但能跑通并输出与其他模型同样的 `schema.json`、`train_config.yaml`、`synthetic.csv` 等。
 
 ### 标准数据集（开箱即用）
 
@@ -146,7 +157,8 @@ TabRisk/
 │   ├── model/
 │   │   ├── ctgan.yaml   # SynthCity CTGAN
 │   │   ├── tvae.yaml    # SynthCity TVAE
-│   │   └── pategan.yaml # SynthCity PATEGAN
+│   │   ├── pategan.yaml # SynthCity PATEGAN
+│   │   └── tabddpm.yaml # SynthCity TabDDPM
 │   └── data/
 │       └── demo.yaml    # 数据配置
 ├── src/

@@ -6,7 +6,7 @@ data framework. It provides a single point of integration so that the system
 can be described as: "We use SynthCity as our tabular synthetic data
 generation backend."
 
-Supported generators: CTGAN, TVAE, PATEGAN.
+Supported generators: CTGAN, TVAE, PATEGAN, TabDDPM.
 
 所有传入 SynthCity 的第三方参数必须经 compat.synthcity 显式过滤，禁止直接假设 API 稳定。
 """
@@ -20,7 +20,7 @@ from loguru import logger
 from synthgen.compat.synthcity import filter_plugin_params
 
 # Supported SynthCity generator names (used in config and load/save)
-SYNTHCITY_GENERATORS = ("ctgan", "tvae", "pategan")
+SYNTHCITY_GENERATORS = ("ctgan", "tvae", "pategan", "tabddpm")
 
 
 def create_plugin(
@@ -35,7 +35,7 @@ def create_plugin(
     显式过滤后传入，禁止直接透传第三方参数。
 
     Args:
-        name: 生成器名称，支持 "ctgan", "tvae", "pategan"
+        name: 生成器名称，支持 "ctgan", "tvae", "pategan", "tabddpm"
         random_state: 随机种子，保证可复现
         **kwargs: 传递给 SynthCity 插件的额外参数（经过滤后仅保留插件支持的）
 
@@ -74,6 +74,14 @@ def create_plugin(
     params.pop("gpu_id", None)
     params.pop("cuda_visible_devices", None)
 
-    plugin = plugins.get(name, **params)
+    try:
+        plugin = plugins.get(name, **params)
+    except KeyError as e:
+        if name == "tabddpm":
+            raise ImportError(
+                "TabDDPM 插件不可用。请确认已安装 synthcity 且版本支持 tabddpm: "
+                "pip install synthcity，或检查 README 的 Dependency Compatibility Notes。"
+            ) from e
+        raise
     logger.debug(f"已创建 SynthCity 插件: {name}, random_state={random_state}")
     return plugin

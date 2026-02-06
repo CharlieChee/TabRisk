@@ -8,6 +8,7 @@ from synthgen.models.synthcity_models import (
     SynthCityCTGANModel,
     SynthCityTVAEModel,
     SynthCityPATEGANModel,
+    SynthCityTabDDPMModel,
     load_synthcity_model,
 )
 from synthgen.synthetic_backend import SYNTHCITY_GENERATORS
@@ -36,6 +37,7 @@ __all__ = [
     "SynthCityCTGANModel",
     "SynthCityTVAEModel",
     "SynthCityPATEGANModel",
+    "SynthCityTabDDPMModel",
     "load_synthcity_model",
     "load_model",
 ]

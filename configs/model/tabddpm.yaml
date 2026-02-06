@@ -1,0 +1,10 @@
+# SynthCity TabDDPM 模型配置（扩散模型）
+_target_: synthgen.models.synthcity_models.SynthCityTabDDPMModel
+name: tabddpm
+params:
+  device: cpu        # cpu | cuda，命令行可 override：model.params.device=cuda
+  random_state: 0    # 可与 train.yaml 的 seed 一致，或通过 model.params.random_state 覆盖
+  cuda_visible_devices: null  # 例如 "0"；null 表示不设置 CUDA_VISIBLE_DEVICES
+  n_iter: ${epochs}
+  batch_size: ${batch_size}
+  verbose: ${verbose}
