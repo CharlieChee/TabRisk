@@ -9,6 +9,12 @@ from synthgen.models.synthcity_models import (
     SynthCityTVAEModel,
     SynthCityPATEGANModel,
     SynthCityTabDDPMModel,
+    SynthCityAIMModel,
+    SynthCityPrivBayesModel,
+    SynthCityDPGANModel,
+    SynthCityARFModel,
+    SynthCityMarginalDistributionsModel,
+    SynthCityUniformSamplerModel,
     load_synthcity_model,
 )
 from synthgen.synthetic_backend import SYNTHCITY_GENERATORS
@@ -38,6 +44,12 @@ __all__ = [
     "SynthCityTVAEModel",
     "SynthCityPATEGANModel",
     "SynthCityTabDDPMModel",
+    "SynthCityAIMModel",
+    "SynthCityPrivBayesModel",
+    "SynthCityDPGANModel",
+    "SynthCityARFModel",
+    "SynthCityMarginalDistributionsModel",
+    "SynthCityUniformSamplerModel",
     "load_synthcity_model",
     "load_model",
 ]

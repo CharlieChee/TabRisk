@@ -1,4 +1,10 @@
-# SynthCity PrivBayes 模型配置（简约占位，参数可通过命令行覆盖）
+# SynthCity PrivBayes 模型配置
+_target_: synthgen.models.synthcity_models.SynthCityPrivBayesModel
 name: privbayes
-params: {}
+params:
+  device: cpu                 # cpu | cuda，命令行可 override：model.params.device=cuda（后端会忽略）
+  cuda_visible_devices: null  # 例如 "6" 或 "0"；null 表示不设置 CUDA_VISIBLE_DEVICES
+  n_iter: ${epochs}
+  batch_size: ${batch_size}
+  verbose: ${verbose}
 

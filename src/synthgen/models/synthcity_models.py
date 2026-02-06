@@ -352,6 +352,146 @@ class SynthCityTabDDPMModel(_SynthCityModelBase):
         return params
 
 
+class SynthCityAIMModel(_SynthCityModelBase):
+    """基于 SynthCity 的 AIM 生成模型。"""
+
+    BACKEND_NAME = "aim"
+
+    def __init__(
+        self,
+        random_state: int = 0,
+        n_iter: int = 300,
+        batch_size: int = 500,
+        verbose: bool = True,
+        **kwargs: Any,
+    ):
+        super().__init__(
+            random_state=random_state,
+            n_iter=n_iter,
+            batch_size=batch_size,
+            verbose=verbose,
+            **kwargs,
+        )
+
+
+class SynthCityPrivBayesModel(_SynthCityModelBase):
+    """基于 SynthCity 的 PrivBayes 生成模型。"""
+
+    BACKEND_NAME = "privbayes"
+
+    def __init__(
+        self,
+        random_state: int = 0,
+        n_iter: int = 300,
+        batch_size: int = 500,
+        verbose: bool = True,
+        **kwargs: Any,
+    ):
+        super().__init__(
+            random_state=random_state,
+            n_iter=n_iter,
+            batch_size=batch_size,
+            verbose=verbose,
+            **kwargs,
+        )
+
+
+class SynthCityDPGANModel(_SynthCityModelBase):
+    """基于 SynthCity 的 DPGAN 生成模型。"""
+
+    BACKEND_NAME = "dpgan"
+
+    def __init__(
+        self,
+        random_state: int = 0,
+        n_iter: int = 300,
+        batch_size: int = 500,
+        verbose: bool = True,
+        generator_n_layers_hidden: int = 2,
+        generator_n_units_hidden: int = 256,
+        discriminator_n_layers_hidden: int = 2,
+        discriminator_n_units_hidden: int = 256,
+        **kwargs: Any,
+    ):
+        super().__init__(
+            random_state=random_state,
+            n_iter=n_iter,
+            batch_size=batch_size,
+            verbose=verbose,
+            generator_n_layers_hidden=generator_n_layers_hidden,
+            generator_n_units_hidden=generator_n_units_hidden,
+            discriminator_n_layers_hidden=discriminator_n_layers_hidden,
+            discriminator_n_units_hidden=discriminator_n_units_hidden,
+            **kwargs,
+        )
+
+
+class SynthCityARFModel(_SynthCityModelBase):
+    """基于 SynthCity 的 ARF 生成模型。"""
+
+    BACKEND_NAME = "arf"
+
+    def __init__(
+        self,
+        random_state: int = 0,
+        n_iter: int = 300,
+        batch_size: int = 500,
+        verbose: bool = True,
+        **kwargs: Any,
+    ):
+        super().__init__(
+            random_state=random_state,
+            n_iter=n_iter,
+            batch_size=batch_size,
+            verbose=verbose,
+            **kwargs,
+        )
+
+
+class SynthCityMarginalDistributionsModel(_SynthCityModelBase):
+    """基于 SynthCity 的 marginal_distributions 生成模型。"""
+
+    BACKEND_NAME = "marginal_distributions"
+
+    def __init__(
+        self,
+        random_state: int = 0,
+        n_iter: int = 300,
+        batch_size: int = 500,
+        verbose: bool = True,
+        **kwargs: Any,
+    ):
+        super().__init__(
+            random_state=random_state,
+            n_iter=n_iter,
+            batch_size=batch_size,
+            verbose=verbose,
+            **kwargs,
+        )
+
+
+class SynthCityUniformSamplerModel(_SynthCityModelBase):
+    """基于 SynthCity 的 uniform_sampler 生成模型。"""
+
+    BACKEND_NAME = "uniform_sampler"
+
+    def __init__(
+        self,
+        random_state: int = 0,
+        n_iter: int = 300,
+        batch_size: int = 500,
+        verbose: bool = True,
+        **kwargs: Any,
+    ):
+        super().__init__(
+            random_state=random_state,
+            n_iter=n_iter,
+            batch_size=batch_size,
+            verbose=verbose,
+            **kwargs,
+        )
+
+
 def load_synthcity_model(file_path: str) -> BaseModel:
     """已弃用：SynthCity plugin 不可 pickle 反序列化。"""
     raise NotImplementedError(
