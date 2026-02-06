@@ -14,6 +14,7 @@ Supported generators: CTGAN, TVAE, PATEGAN, TabDDPM.
 from __future__ import annotations
 
 from typing import Any, Dict
+import inspect
 
 from loguru import logger
 
@@ -211,16 +212,42 @@ def create_plugin(
 
         logger.info("Using AIM device: %s", params["device"])
 
-    # 对 TVAE：兼容不同版本 SynthCity 的参数签名，移除当前版本不支持的参数
+    # 对 TVAE：基于插件构造函数签名做白名单过滤，彻底移除不兼容参数
     if plugin_name == "tvae":
         params = dict(params)
-        removed_keys = []
-        # 部分 SynthCity 版本的 TVAE 不再接受 n_layers_hidden
-        if "n_layers_hidden" in params:
-            params.pop("n_layers_hidden", None)
-            removed_keys.append("n_layers_hidden")
-        if removed_keys:
-            logger.info("Removed unsupported TVAE params: %s", removed_keys)
+        try:
+            tvae_cls = None
+            # 优先从 Plugins 内部注册表获取 TVAE 类，兼容不同 SynthCity 版本
+            if hasattr(plugins, "_plugins") and isinstance(getattr(plugins, "_plugins", None), dict):
+                tvae_cls = plugins._plugins.get("tvae", None)
+            if tvae_cls is None and hasattr(plugins, "plugins") and isinstance(getattr(plugins, "plugins", None), dict):
+                tvae_cls = plugins.plugins.get("tvae", None)
+
+            if tvae_cls is not None:
+                sig = inspect.signature(tvae_cls.__init__)
+                # 仅保留显式声明的关键字参数；**kwargs 不需要额外处理
+                allowed_keys = {
+                    p.name
+                    for p in sig.parameters.values()
+                    if p.kind in (
+                        inspect.Parameter.POSITIONAL_OR_KEYWORD,
+                        inspect.Parameter.KEYWORD_ONLY,
+                    )
+                }
+                filtered_params: Dict[str, Any] = {}
+                dropped: list[str] = []
+                for k, v in params.items():
+                    if k in allowed_keys:
+                        filtered_params[k] = v
+                    else:
+                        dropped.append(k)
+                if dropped:
+                    logger.info("Filtered unsupported TVAE params: %s", dropped)
+                params = filtered_params
+            else:
+                logger.warning("TVAE plugin class not found in Plugins registry; skip TVAE param filtering.")
+        except Exception as e:
+            logger.warning("Failed to introspect TVAE signature for param filtering: %r", e)
 
     # AIM 安全参数夹紧：防止 num_marginals 过大导致 SynthCity 内部采样错误
     if plugin_name == "aim":
