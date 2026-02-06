@@ -1,0 +1,10 @@
+# SynthCity DDPM 模型配置（与 tabddpm 同一实现，model=ddpm 与 model=tabddpm 均可使用）
+_target_: synthgen.models.synthcity_models.SynthCityTabDDPMModel
+name: ddpm
+params:
+  device: cpu        # cpu | cuda，命令行可 override：model.params.device=cuda
+  random_state: 0
+  cuda_visible_devices: null
+  n_iter: ${epochs}
+  batch_size: ${batch_size}
+  verbose: ${verbose}
