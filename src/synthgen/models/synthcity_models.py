@@ -269,26 +269,6 @@ class SynthCityTVAEModel(_SynthCityModelBase):
 
     BACKEND_NAME = "tvae"
 
-    def __init__(
-        self,
-        random_state: int = 0,
-        n_iter: int = 300,
-        batch_size: int = 500,
-        verbose: bool = True,
-        n_layers_hidden: int = 2,
-        n_units_hidden: int = 256,
-        **kwargs: Any,
-    ):
-        super().__init__(
-            random_state=random_state,
-            n_iter=n_iter,
-            batch_size=batch_size,
-            verbose=verbose,
-            n_layers_hidden=n_layers_hidden,
-            n_units_hidden=n_units_hidden,
-            **kwargs,
-        )
-
 
 class SynthCityPATEGANModel(_SynthCityModelBase):
     """基于 SynthCity 的 PATEGAN 生成模型（隐私友好）。"""
