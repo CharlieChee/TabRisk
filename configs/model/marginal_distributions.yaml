@@ -1,0 +1,4 @@
+# SynthCity marginal_distributions 模型配置（简约占位，参数可通过命令行覆盖）
+name: marginal_distributions
+params: {}
+
