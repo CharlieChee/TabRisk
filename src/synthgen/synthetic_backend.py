@@ -181,6 +181,36 @@ def create_plugin(
 
         logger.info("Using ddpm device: %s", params["device"])
 
+    # 对 AIM：若 device 为字符串，同样转换为 torch.device，默认推荐使用 CPU
+    if plugin_name == "aim" and isinstance(params.get("device"), str):
+        try:
+            import torch
+        except ImportError as e:  # pragma: no cover
+            raise ImportError(
+                "使用 AIM 插件需要已安装 torch，但当前无法导入 torch。"
+            ) from e
+
+        dev_str = params["device"].strip()
+        try:
+            if dev_str in {"cuda", "gpu"}:
+                if not torch.cuda.is_available():
+                    raise ValueError(
+                        "配置了 AIM device=cuda/gpu，但当前环境未检测到可用的 CUDA 设备。"
+                    )
+                params["device"] = torch.device("cuda")
+            elif dev_str.startswith("cuda:"):
+                params["device"] = torch.device(dev_str)
+            else:
+                # 对于 AIM，默认推荐使用 CPU；其他字符串交给 torch.device 解析
+                params["device"] = torch.device(dev_str)
+        except Exception as e:
+            raise ValueError(
+                f"无效的 AIM device 配置: {dev_str!r}。"
+                "请使用 cpu / cuda / cuda:0 等合法字符串，或检查当前环境的设备可用性。"
+            ) from e
+
+        logger.info("Using AIM device: %s", params["device"])
+
     # 对部分非深度学习插件清理无关训练参数，避免 pydantic 校验报错
     if plugin_name in {
         "privbayes",
@@ -191,12 +221,21 @@ def create_plugin(
     }:
         params = dict(params)
         ignored_keys = []
-        for k in ("device", "batch_size", "n_iter", "lr", "learning_rate"):
+        # 训练相关参数（步数、batch、学习率等）对这些插件无意义，统一丢弃
+        for k in ("batch_size", "n_iter", "lr", "learning_rate"):
             if k in params:
                 params.pop(k, None)
                 ignored_keys.append(k)
+        # 对除 AIM 以外的插件，device 也一并丢弃；AIM 需要显式传入 device
+        if plugin_name != "aim" and "device" in params:
+            params.pop("device", None)
+            ignored_keys.append("device")
         if ignored_keys:
             logger.info("Ignored unsupported params for %s: %s", plugin_name, ignored_keys)
+
+    # 打印 AIM 最终参数（方便调试 baseline 设置）
+    if plugin_name == "aim":
+        logger.info("AIM final params passed to SynthCity: %s", params)
 
     try:
         plugin = plugins.get(plugin_name, **params)

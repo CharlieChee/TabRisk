@@ -1,8 +1,26 @@
-# SynthCity AIM 模型配置
+# SynthCity AIM 模型配置（带 FAST baseline 预设）
 _target_: synthgen.models.synthcity_models.SynthCityAIMModel
 name: aim
 params:
-  device: cpu                 # cpu | cuda，命令行可 override：model.params.device=cuda（后端会忽略）
+  # DP budget（保持 SynthCity 默认）
+  epsilon: 1.0
+  delta: 1e-9
+
+  # FAST PRESET：大幅减小搜索空间与容忍度，加快 baseline 运行
+  degree: 1
+  num_marginals: 20
+  max_model_size: 20
+  max_cells: 200
+  sampling_patience: 50
+  compress_dataset: true
+
+  # 避免误导：AIM 不一定真的 GPU 加速，默认使用 CPU
+  device: cpu                 # 可命令行 override：model.params.device=cuda 等
+
+  # 可选：将 AIM workspace 写到当前 run 目录，避免多任务冲突
+  # workspace: ${hydra:run.dir}/aim_workspace
+
+  # 兼容现有 CLI 习惯的训练参数（AIM 插件会忽略这些）
   cuda_visible_devices: null  # 例如 "6" 或 "0"；null 表示不设置 CUDA_VISIBLE_DEVICES
   n_iter: ${epochs}
   batch_size: ${batch_size}
