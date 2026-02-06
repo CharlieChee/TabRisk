@@ -211,6 +211,17 @@ def create_plugin(
 
         logger.info("Using AIM device: %s", params["device"])
 
+    # 对 TVAE：兼容不同版本 SynthCity 的参数签名，移除当前版本不支持的参数
+    if plugin_name == "tvae":
+        params = dict(params)
+        removed_keys = []
+        # 部分 SynthCity 版本的 TVAE 不再接受 n_layers_hidden
+        if "n_layers_hidden" in params:
+            params.pop("n_layers_hidden", None)
+            removed_keys.append("n_layers_hidden")
+        if removed_keys:
+            logger.info("Removed unsupported TVAE params: %s", removed_keys)
+
     # AIM 安全参数夹紧：防止 num_marginals 过大导致 SynthCity 内部采样错误
     if plugin_name == "aim":
         # 若未指定 degree，则强制使用 1 作为稳定 baseline
