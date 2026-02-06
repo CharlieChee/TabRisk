@@ -383,6 +383,21 @@ def main(cfg: DictConfig) -> None:
     if synthetic_rows > 0:
         console.print(f"合成数据: {output_dir / 'synthetic.csv'} ({synthetic_rows} 行)")
 
+    # 可选：训练保存完成后自动在该 run 目录下执行 sdv + synthcity 评估
+    auto_evaluate = getattr(cfg, "auto_evaluate", True)
+    if auto_evaluate and synthetic_rows > 0:
+        from synthgen.evaluation.runner import run_evaluation
+        run_dir_str = str(output_dir.resolve())
+        eval_base = {"run_dir": run_dir_str, "output_subdir": "eval", "target_col": None, "task_type": None}
+        for ev_name in ("sdv", "synthcity"):
+            try:
+                ev_cfg = OmegaConf.load(CONFIG_DIR / "evaluator" / f"{ev_name}.yaml")
+                eval_cfg = OmegaConf.merge(OmegaConf.create(eval_base), OmegaConf.create({"evaluator": ev_cfg}))
+                logger.info(f"自动评估: evaluator={ev_name} run_dir={run_dir_str}")
+                run_evaluation(eval_cfg)
+            except Exception as e:
+                logger.warning(f"自动评估 evaluator={ev_name} 失败: {e}")
+
 
 if __name__ == "__main__":
     main()

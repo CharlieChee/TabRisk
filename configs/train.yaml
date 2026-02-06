@@ -23,3 +23,6 @@ train_rows: null
 save_model: false
 # 训练完成后立即生成的合成数据行数（0=不生成）
 synthetic_rows: 1000
+
+# 训练保存完成后是否自动在该 run 目录下执行评估（sdv + synthcity 两种）
+auto_evaluate: true
