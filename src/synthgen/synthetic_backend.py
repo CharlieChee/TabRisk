@@ -20,7 +20,34 @@ from loguru import logger
 from synthgen.compat.synthcity import filter_plugin_params
 
 # Supported SynthCity generator names (used in config and load/save)
-SYNTHCITY_GENERATORS = ("ctgan", "tvae", "pategan", "tabddpm", "ddpm")
+SYNTHCITY_GENERATORS = (
+    "ctgan",
+    "tvae",
+    "pategan",
+    "tabddpm",
+    "ddpm",
+    "privbayes",
+    "aim",
+    "dpgan",
+    "arf",
+    "marginal_distributions",
+    "uniform_sampler",
+)
+
+# Unified CLI model name -> SynthCity plugin name aliases
+ALIASES = {
+    "tabddpm": "ddpm",
+    "ddpm": "ddpm",
+    "ctgan": "ctgan",
+    "tvae": "tvae",
+    "pategan": "pategan",
+    "privbayes": "privbayes",
+    "aim": "aim",
+    "dpgan": "dpgan",
+    "arf": "arf",
+    "marginal_distributions": "marginal_distributions",
+    "uniform_sampler": "uniform_sampler",
+}
 
 
 def _list_plugin_names(plugins: Any) -> list:
@@ -88,7 +115,8 @@ def create_plugin(
         ValueError: 不支持的 name
         ImportError: 未安装 synthcity
     """
-    if name not in SYNTHCITY_GENERATORS:
+    name_lower = name.lower()
+    if name_lower not in SYNTHCITY_GENERATORS:
         raise ValueError(
             f"不支持的生成器: {name}，可选: {SYNTHCITY_GENERATORS}"
         )
@@ -107,10 +135,9 @@ def create_plugin(
             ) from e
         raise
 
-    # 别名映射：TabRisk 的 tabddpm 对应 SynthCity 的 ddpm；ddpm 保持不变
-    plugin_name = "ddpm" if name == "tabddpm" else name
-    if name == "tabddpm":
-        logger.info("Mapping model 'tabddpm' -> synthcity plugin 'ddpm'")
+    # 统一别名映射：所有 CLI 名称先映射为 SynthCity 插件名
+    plugin_name = ALIASES.get(name_lower, name_lower)
+    logger.info("Mapping model '%s' -> synthcity plugin '%s'", name, plugin_name)
 
     params: Dict[str, Any] = {"random_state": random_state, **kwargs}
     plugins = Plugins()
@@ -153,6 +180,19 @@ def create_plugin(
             ) from e
 
         logger.info("Using ddpm device: %s", params["device"])
+
+    # 对部分非深度学习插件清理无关训练参数，避免 pydantic 校验报错
+    if plugin_name in {
+        "privbayes",
+        "aim",
+        "marginal_distributions",
+        "uniform_sampler",
+        "arf",
+    }:
+        params = dict(params)
+        params.pop("device", None)
+        params.pop("batch_size", None)
+        params.pop("n_iter", None)
 
     try:
         plugin = plugins.get(plugin_name, **params)
