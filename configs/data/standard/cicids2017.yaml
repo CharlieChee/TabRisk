@@ -1,0 +1,11 @@
+# CICIDS-2017 入侵检测基准（HuggingFace），安全/ML 顶会常用，约 210 万行
+# 使用方式: python -m synthgen.train data=standard/cicids2017 train_rows=2000 ...
+# 建议配合 train_rows 抽样（如 2000～50000）以控制训练时间；target: Label（多分类）
+_target_: synthgen.data.load.load_dataset
+params:
+  source: hf
+  name: bvk/CICIDS-2017
+  split: train
+  target: Label
+  cache_dir: data/cache
+  dropna: true

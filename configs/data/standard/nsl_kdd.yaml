@@ -1,0 +1,11 @@
+# NSL-KDD 入侵检测基准（HuggingFace），KDD/安全顶会常用
+# 使用方式: python -m synthgen.train data=standard/nsl_kdd
+# 约 15 万行 train，41 维特征，二分类 target: class (normal / anomaly)
+_target_: synthgen.data.load.load_dataset
+params:
+  source: hf
+  name: Mireu-Lab/NSL-KDD
+  split: train
+  target: class
+  cache_dir: data/cache
+  dropna: true

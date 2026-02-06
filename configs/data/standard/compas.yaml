@@ -1,0 +1,11 @@
+# COMPAS 再犯预测（HuggingFace），公平性/风险常用
+# 使用方式: python -m synthgen.train data=standard/compas
+_target_: synthgen.data.load.load_dataset
+params:
+  source: hf
+  name: mstz/compas
+  hf_config: two-years-recidividity
+  split: train
+  target: two_years_recidivous
+  cache_dir: data/cache
+  dropna: true

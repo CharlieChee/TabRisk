@@ -83,9 +83,22 @@ python -m synthgen.train data=standard/adult_hf model=ctgan synthetic_rows=10000
 # German Credit（OpenML）
 python -m synthgen.train data=standard/credit_german model=ctgan synthetic_rows=1000
 
+# 领域常用基准（Census / Marketing / Finance / Medical / Insurance / Fairness）
+python -m synthgen.train data=standard/adult_openml model=ctgan synthetic_rows=5000   # Census
+python -m synthgen.train data=standard/bank model=ctgan synthetic_rows=5000            # Marketing
+python -m synthgen.train data=standard/credit model=ctgan train_rows=5000 synthetic_rows=5000   # Finance（Give Me Some Credit，可设 train_rows）
+python -m synthgen.train data=standard/diabetes model=ctgan synthetic_rows=500        # Medical
+python -m synthgen.train data=standard/insurance model=ctgan synthetic_rows=5000      # Insurance（回归）
+python -m synthgen.train data=standard/law_school model=ctgan synthetic_rows=5000    # Fairness / Risk
+python -m synthgen.train data=standard/compas model=ctgan synthetic_rows=5000        # Fairness / Risk
+
 # Iris / Breast Cancer（sklearn 内置，无需网络，适合 CI/本地快速试跑）
 python -m synthgen.train data=standard/iris model=ctgan epochs=10 synthetic_rows=200
 python -m synthgen.train data=standard/breast_cancer model=ctgan epochs=10 synthetic_rows=200
+
+# 安全/入侵检测常用基准（表格合成与 IDS 研究常用）
+python -m synthgen.train data=standard/nsl_kdd model=ctgan train_rows=2000 synthetic_rows=2000   # NSL-KDD，二分类
+python -m synthgen.train data=standard/cicids2017 model=ctgan train_rows=2000 synthetic_rows=2000   # CICIDS-2017，建议设 train_rows
 ```
 
 配置文件在 `configs/data/standard/*.yaml`，训练流程不变，仍输出 `schema.json`、`synthetic.csv` 等。

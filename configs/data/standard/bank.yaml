@@ -1,0 +1,11 @@
+# Bank Marketing（OpenML），营销/客户订阅预测常用
+# 使用方式: python -m synthgen.train data=standard/bank
+_target_: synthgen.data.load.load_dataset
+params:
+  source: openml
+  name: bank-marketing
+  openml_id: 1461
+  split: null
+  target: y
+  cache_dir: data/cache
+  dropna: true

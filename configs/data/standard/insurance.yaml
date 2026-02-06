@@ -1,0 +1,11 @@
+# freMTPL2sev 法国车险索赔（OpenML），保险/精算常用，回归任务
+# 使用方式: python -m synthgen.train data=standard/insurance
+_target_: synthgen.data.load.load_dataset
+params:
+  source: openml
+  name: freMTPL2sev
+  openml_id: 41215
+  split: null
+  target: ClaimAmount
+  cache_dir: data/cache
+  dropna: true

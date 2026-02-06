@@ -18,6 +18,7 @@ def _get_local_cache_path(
     openml_id: Optional[int] = None,
     split: Optional[str] = None,
     cache_dir: Optional[str] = None,
+    extra_key: Optional[str] = None,
 ) -> Path:
     """根据 source 和关键参数生成本地 CSV 缓存文件路径（用于「先检查是否存在，存在则直接用」）。"""
     cache_path = _ensure_cache_dir(cache_dir)
@@ -26,7 +27,7 @@ def _get_local_cache_path(
         key = f"openml_{openml_id if openml_id is not None else name}"
     elif source == "hf":
         safe_name = name.replace("/", "_").replace(" ", "-")
-        key = f"hf_{safe_name}" + (f"_{split}" if split else "")
+        key = f"hf_{safe_name}" + (f"_{split}" if split else "") + (f"_{extra_key}" if extra_key else "")
     elif source == "sdv_demo":
         key = f"sdv_{name}"
     elif source == "sklearn":
@@ -127,6 +128,7 @@ def _load_hf(
 ) -> pd.DataFrame:
     """从 HuggingFace Datasets 加载，转成 pandas，缓存到 cache_dir。
     在国内网络下默认使用 HF 镜像（hf_mirror），可通过配置或环境变量 HF_ENDPOINT 覆盖。
+    若提供 kwargs.hf_config，则作为 HF 的 config 名传入（如 mstz/compas 的 two-years-recidividity）。
     """
     # 必须在 import datasets 之前设置 HF_ENDPOINT，否则 huggingface_hub 会先用默认 endpoint
     # 初始化 HTTP 客户端，后续切换会导致 "client has been closed" 等错误
@@ -141,7 +143,9 @@ def _load_hf(
     cache_path = _ensure_cache_dir(cache_dir)
     hf_cache = str(cache_path / "hf")
 
-    ds = load_dataset(name, cache_dir=hf_cache, **kwargs)
+    # HF 的 load_dataset(path, name=config, ...)，config 为可选；从 kwargs 中取出避免传给 HF
+    hf_config = kwargs.pop("hf_config", None)
+    ds = load_dataset(name, name=hf_config, cache_dir=hf_cache, **kwargs)
     if split:
         if split not in ds:
             raise ValueError(f"split '{split}' 不存在，可用: {list(ds.keys())}")
@@ -236,8 +240,9 @@ def load_dataset(
         cache_dir = str(Path(project_root) / cache_dir)
 
     # 本地 CSV 缓存：先检查是否已存在，存在则直接加载，避免重复下载
+    extra_key = kwargs.get("hf_config")
     local_cache_path = _get_local_cache_path(
-        source=source, name=name, openml_id=openml_id, split=split, cache_dir=cache_dir
+        source=source, name=name, openml_id=openml_id, split=split, cache_dir=cache_dir, extra_key=extra_key
     )
     if local_cache_path.exists():
         logger.info(f"使用本地缓存: {local_cache_path}")
