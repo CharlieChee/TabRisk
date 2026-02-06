@@ -190,9 +190,13 @@ def create_plugin(
         "arf",
     }:
         params = dict(params)
-        params.pop("device", None)
-        params.pop("batch_size", None)
-        params.pop("n_iter", None)
+        ignored_keys = []
+        for k in ("device", "batch_size", "n_iter", "lr", "learning_rate"):
+            if k in params:
+                params.pop(k, None)
+                ignored_keys.append(k)
+        if ignored_keys:
+            logger.info("Ignored unsupported params for %s: %s", plugin_name, ignored_keys)
 
     try:
         plugin = plugins.get(plugin_name, **params)
