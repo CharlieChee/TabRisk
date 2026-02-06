@@ -1,13 +1,40 @@
 """数据加载：CSV 与标准数据集（OpenML / HF / SDV demo / sklearn）统一入口。"""
 
+import hashlib
 import os
 from pathlib import Path
 from typing import Any, Optional
 
 import pandas as pd
+from loguru import logger
 
 # HuggingFace 国内镜像，便于在中国网络环境下下载
 HF_MIRROR_DEFAULT = "https://hf-mirror.com"
+
+
+def _get_local_cache_path(
+    source: str,
+    name: str,
+    openml_id: Optional[int] = None,
+    split: Optional[str] = None,
+    cache_dir: Optional[str] = None,
+) -> Path:
+    """根据 source 和关键参数生成本地 CSV 缓存文件路径（用于「先检查是否存在，存在则直接用」）。"""
+    cache_path = _ensure_cache_dir(cache_dir)
+    # 文件名：对 source+name+openml_id+split 做可读或哈希，避免冲突
+    if source == "openml":
+        key = f"openml_{openml_id if openml_id is not None else name}"
+    elif source == "hf":
+        safe_name = name.replace("/", "_").replace(" ", "-")
+        key = f"hf_{safe_name}" + (f"_{split}" if split else "")
+    elif source == "sdv_demo":
+        key = f"sdv_{name}"
+    elif source == "sklearn":
+        key = f"sklearn_{name}"
+    else:
+        payload = f"{source}_{name}_{openml_id}_{split}"
+        key = "cache_" + hashlib.md5(payload.encode()).hexdigest()[:12]
+    return cache_path / f"{key}.csv"
 
 
 def load_csv(file_path: str, **kwargs) -> pd.DataFrame:
@@ -208,6 +235,16 @@ def load_dataset(
     if project_root and cache_dir and not Path(cache_dir).is_absolute():
         cache_dir = str(Path(project_root) / cache_dir)
 
+    # 本地 CSV 缓存：先检查是否已存在，存在则直接加载，避免重复下载
+    local_cache_path = _get_local_cache_path(
+        source=source, name=name, openml_id=openml_id, split=split, cache_dir=cache_dir
+    )
+    if local_cache_path.exists():
+        logger.info(f"使用本地缓存: {local_cache_path}")
+        df = pd.read_csv(local_cache_path, encoding="utf-8")
+        return _normalize_dataframe(df, dropna=dropna)
+
+    # 不存在则从源下载
     if source == "openml":
         df = _load_openml(name=name, openml_id=openml_id, split=split, cache_dir=cache_dir, **kwargs)
     elif source == "hf":
@@ -221,5 +258,10 @@ def load_dataset(
         df = _load_sklearn(name=name, **kwargs)
     else:
         raise ValueError(f"不支持的 source: {source}，可选: openml | hf | sdv_demo | sklearn")
+
+    # 下载后保存到本地缓存，便于下一次直接读取
+    local_cache_path.parent.mkdir(parents=True, exist_ok=True)
+    df.to_csv(local_cache_path, index=False, encoding="utf-8")
+    logger.info(f"已保存到本地缓存: {local_cache_path}")
 
     return _normalize_dataframe(df, dropna=dropna)
