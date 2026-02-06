@@ -269,9 +269,19 @@ def main(cfg: DictConfig) -> None:
 
     # 预处理（fit_transform 在 schema 推断 / 模型 fit 之前）
     preproc_cfg = getattr(cfg, "preprocess", None) or OmegaConf.create({"name": "none", "params": {}})
+    # 兼容 params 为 DictConfig / dict / None 三种情况
+    params_obj = preproc_cfg.get("params", {}) if hasattr(preproc_cfg, "get") else {}
+    if params_obj is None:
+        params_obj = {}
+    if OmegaConf.is_config(params_obj):
+        preproc_params = OmegaConf.to_container(params_obj, resolve=True)
+    else:
+        # 已经是普通 dict 或其他可用容器，直接使用
+        preproc_params = params_obj
+
     preproc = get_preprocessor(
         OmegaConf.select(preproc_cfg, "name", default="none"),
-        OmegaConf.to_container(preproc_cfg.get("params", {}), resolve=True),
+        preproc_params,
     )
     train_df = preproc.fit_transform(df)
     logger.info(f"预处理: {preproc.state_dict()['name']}, 训练数据形状: {train_df.shape}")

@@ -30,7 +30,3 @@ CUDA_VISIBLE_DEVICES=7 python -m synthgen.train data=standard/law_school model=c
 CUDA_VISIBLE_DEVICES=7 python -m synthgen.train data=standard/compas model=ctgan model.params.device=cuda preprocess=monotonic train_rows=2000 synthetic_rows=2000 model.params.n_iter=300 model.params.batch_size=1024
 
   
-CUDA_VISIBLE_DEVICES=7 python -m synthgen.train \
-  data=standard/adult_openml model=aim preprocess=monotonic \
-  train_rows=1000 synthetic_rows=1000 \
-  +model.params.device=cuda +model.params.n_iter=40 +model.params.batch_size=1024
