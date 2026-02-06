@@ -211,6 +211,44 @@ def create_plugin(
 
         logger.info("Using AIM device: %s", params["device"])
 
+    # AIM 安全参数夹紧：防止 num_marginals 过大导致 SynthCity 内部采样错误
+    if plugin_name == "aim":
+        # 若未指定 degree，则强制使用 1 作为稳定 baseline
+        if "degree" not in params or params["degree"] is None:
+            params["degree"] = 1
+            logger.info("AIM degree not specified; defaulting to degree=1 for fast & stable baseline.")
+        else:
+            try:
+                deg_val = int(params["degree"])
+                if deg_val > 1:
+                    logger.warning(
+                        "AIM degree=%s may be slow or unstable on wide tables; "
+                        "consider using degree=1 for baseline experiments.",
+                        deg_val,
+                    )
+            except Exception:
+                logger.warning("AIM degree value %r is not an int; please ensure it is a small positive integer.", params["degree"])
+
+        # 对 num_marginals 做上限夹紧，避免超过候选集合大小
+        SAFE_MAX_NUM_MARGINALS = 5
+        nm_val = params.get("num_marginals", None)
+        try:
+            if nm_val is not None:
+                nm_int = int(nm_val)
+                if nm_int > SAFE_MAX_NUM_MARGINALS:
+                    logger.warning(
+                        "AIM num_marginals=%s is too large for safe baseline; "
+                        "clamping to %s to avoid SynthCity AIM sampling errors.",
+                        nm_int,
+                        SAFE_MAX_NUM_MARGINALS,
+                    )
+                    params["num_marginals"] = SAFE_MAX_NUM_MARGINALS
+        except Exception:
+            logger.warning(
+                "AIM num_marginals value %r is not an int; please ensure it is a small positive integer.",
+                nm_val,
+            )
+
     # 对部分非深度学习插件清理无关训练参数，避免 pydantic 校验报错
     if plugin_name in {
         "privbayes",

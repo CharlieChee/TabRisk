@@ -6,12 +6,13 @@ params:
   epsilon: 1.0
   delta: 1e-9
 
-  # FAST PRESET：大幅减小搜索空间与容忍度，加快 baseline 运行
+  # FAST PRESET：大幅减小搜索空间与容忍度，加快 baseline 运行并避免候选集不足
   degree: 1
-  num_marginals: 20
-  max_model_size: 20
-  max_cells: 200
-  sampling_patience: 50
+  # 关键：将 num_marginals 降到较小默认值，避免超过候选集合大小
+  num_marginals: 5
+  max_model_size: 10
+  max_cells: 100
+  sampling_patience: 20
   compress_dataset: true
 
   # 避免误导：AIM 不一定真的 GPU 加速，默认使用 CPU
