@@ -57,7 +57,7 @@ def _safe_str(val) -> str:
 def build_output_dir(cfg: DictConfig, project_root: Path) -> Path:
     """构建包含详细信息的输出目录名，便于从目录名识别实验配置。
 
-    示例：train_adult_hf_10000rows_ctgan_100iter_20260205_132935
+    示例：train_adult_hf_preprocess_none_train5000_synth2000_ctgan_100iter_20260205_132935
     """
     parts = ["train"]
 
@@ -87,10 +87,20 @@ def build_output_dir(cfg: DictConfig, project_root: Path) -> Path:
     if preprocess_choice:
         parts.append(f"preprocess_{_safe_str(str(preprocess_choice))}")
 
-    # train_rows
+    # train 条数
     train_rows = getattr(cfg, "train_rows", None)
     if train_rows is not None and int(train_rows) > 0:
-        parts.append(f"{train_rows}rows")
+        parts.append(f"train{int(train_rows)}")
+
+    # synth 条数
+    synthetic_rows = getattr(cfg, "synthetic_rows", None)
+    if synthetic_rows is not None:
+        try:
+            n = int(synthetic_rows)
+            if n >= 0:
+                parts.append(f"synth{n}")
+        except (TypeError, ValueError):
+            pass
 
     # model 名：优先从 choices 获取，否则用 model.name
     model_str = None
