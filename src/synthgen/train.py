@@ -361,6 +361,10 @@ def main(cfg: DictConfig) -> None:
     original_path = output_dir / "original.csv"
     df.to_csv(original_path, index=False)
     logger.info(f"原始训练数据已保存: {original_path} ({len(df)} 行)")
+    # 同时保存一份 train.csv（与 original.csv 内容相同）
+    train_path = output_dir / "train.csv"
+    df.to_csv(train_path, index=False)
+    logger.info(f"训练数据副本已保存: {train_path} ({len(df)} 行)")
 
     # 保存 holdout 数据（与 original.csv 行级互斥，用于 MIA 等评估）
     test_path = output_dir / "test.csv"
