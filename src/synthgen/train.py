@@ -78,6 +78,15 @@ def build_output_dir(cfg: DictConfig, project_root: Path) -> Path:
             if data_name:
                 parts.append(_safe_str(data_name))
 
+    # preprocess：monotonic 或 none
+    preprocess_choice = None
+    if choices:
+        preprocess_choice = OmegaConf.select(choices, "preprocess", default=None)
+    if not preprocess_choice:
+        preprocess_choice = OmegaConf.select(cfg, "preprocess.name", default=None)
+    if preprocess_choice:
+        parts.append(f"preprocess_{_safe_str(str(preprocess_choice))}")
+
     # train_rows
     train_rows = getattr(cfg, "train_rows", None)
     if train_rows is not None and int(train_rows) > 0:
