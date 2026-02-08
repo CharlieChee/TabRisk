@@ -260,12 +260,19 @@ def main(cfg: DictConfig) -> None:
     df = instantiate_data_loader(cfg, project_root)
     logger.info(f"数据形状: {df.shape}")
 
+    # 保留完整数据引用（抽样前），用于计算与 original 互斥的 holdout
+    df_all = df.copy()
+
     # 训练数据抽样：若配置了 train_rows > 0，则随机抽取 n 条参与训练
     train_rows = getattr(cfg, "train_rows", None)
     if train_rows is not None and int(train_rows) > 0:
         n_sample = min(int(train_rows), len(df))
-        df = df.sample(n=n_sample, random_state=cfg.seed).reset_index(drop=True)
+        sample_result = df.sample(n=n_sample, random_state=cfg.seed)
+        df = sample_result.reset_index(drop=True)
+        holdout_df = df_all.drop(sample_result.index).reset_index(drop=True)
         logger.info(f"已随机抽样 {n_sample} 条数据用于训练（train_rows={train_rows}）")
+    else:
+        holdout_df = pd.DataFrame(columns=df.columns)
 
     # 预处理（fit_transform 在 schema 推断 / 模型 fit 之前）
     preproc_cfg = getattr(cfg, "preprocess", None) or OmegaConf.create({"name": "none", "params": {}})
@@ -355,6 +362,11 @@ def main(cfg: DictConfig) -> None:
     df.to_csv(original_path, index=False)
     logger.info(f"原始训练数据已保存: {original_path} ({len(df)} 行)")
 
+    # 保存 holdout 数据（与 original.csv 行级互斥，用于 MIA 等评估）
+    test_path = output_dir / "test.csv"
+    holdout_df.to_csv(test_path, index=False)
+    logger.info(f"Holdout 评估数据已保存: {test_path} ({len(holdout_df)} 行)")
+
     # 保存预处理规则（便于复现）
     preprocess_path = output_dir / "preprocess.json"
     with open(preprocess_path, "w", encoding="utf-8") as f:
@@ -390,6 +402,7 @@ def main(cfg: DictConfig) -> None:
     console.print(f"Schema: {output_dir / 'schema.json'}")
     console.print(f"配置: {run_config_path}")
     console.print(f"原始训练数据: {output_dir / 'original.csv'} ({len(df)} 行)")
+    console.print(f"Holdout 评估数据: {output_dir / 'test.csv'} ({len(holdout_df)} 行)")
     if synthetic_rows > 0:
         console.print(f"合成数据: {output_dir / 'synthetic.csv'} ({synthetic_rows} 行)")
 
