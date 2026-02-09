@@ -9,5 +9,5 @@ shadow_synthetic_rows: null           # null 表示使用主流程的 synthetic_
 random_seed: null                     # null 表示使用主流程的 seed
 
 # 并行：多进程执行，每进程绑定一个 GPU（需多卡时请勿在命令行限制 CUDA_VISIBLE_DEVICES，或设为 0,1,...,7）
-num_workers: 32                       # 并行任务数（进程数），默认 32 任务轮询绑到 8 卡，每卡约 4 任务
+num_workers: 64                       # 并行任务数（进程数），默认 32 任务轮询绑到 8 卡，每卡约 4 任务
 gpu_ids: [0, 1, 2, 3, 4, 5, 6, 7]     # 使用的 GPU 物理编号，任务按 job_index % len(gpu_ids) 轮询分配
