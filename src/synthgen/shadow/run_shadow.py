@@ -6,10 +6,14 @@ Shadow 数据生成流程（严格 leave-one-out 语义）。
 - in：train_in_k = base_aux_k ∪ {target}
 - out：train_out_k = base_aux_k ∪ {x}，x 为 non-member 且 x≠target
 - 唯一差异为是否包含 target
+
+shadow_model=true 时支持多进程并行（num_workers × gpu_ids），每进程绑定一个 GPU。
 """
 
+import os
+from concurrent.futures import ProcessPoolExecutor, as_completed
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 
 import json
 import numpy as np
@@ -65,6 +69,71 @@ def _prepare_train_df_for_model(df: pd.DataFrame, member_col: str = SHADOW_MEMBE
     for col in out.select_dtypes(include=["object"]).columns:
         out[col] = out[col].astype("category")
     return out
+
+
+def _run_one_shadow_job(args: Tuple) -> Optional[str]:
+    """
+    单任务：在指定 GPU 上完成一个 (target_idx, round_k) 的 in/out 训练与合成。
+    供多进程调用，必须为模块级函数且参数可 pickle。
+    args: (run_dir_str, t_idx, target_idx, k, gpu_id, N, n_base, synth_rows, seed)
+    """
+    (
+        run_dir_str,
+        t_idx,
+        target_idx,
+        k,
+        gpu_id,
+        N,
+        n_base,
+        synth_rows,
+        seed,
+    ) = args
+    run_dir = Path(run_dir_str)
+    os.environ["CUDA_VISIBLE_DEVICES"] = str(gpu_id)
+
+    run_cfg = OmegaConf.load(run_dir / "train_config.yaml")
+    candidate_df = pd.read_csv(run_dir / "candidate.csv")
+    aux_df = pd.read_csv(run_dir / "aux.csv")
+    schema = Schema.load(str(run_dir / "schema.json"))
+    train_members = candidate_df[candidate_df[SHADOW_MEMBER_COL] == 1].reset_index(drop=True)
+    non_members = candidate_df[candidate_df[SHADOW_MEMBER_COL] == 0].reset_index(drop=True)
+    fit_df = _prepare_train_df_for_model(train_members)
+    preproc = _load_preprocessor(run_dir, fit_df)
+    model_cfg = run_cfg.model
+
+    target_row = train_members.iloc[target_idx : target_idx + 1]
+    target_dir = run_dir / "shadow" / f"target_{t_idx}"
+    target_dir.mkdir(parents=True, exist_ok=True)
+
+    rng = np.random.default_rng(seed + t_idx * 10000 + k)
+    aux_indices = rng.choice(len(aux_df), size=n_base, replace=False)
+    base_aux_k = aux_df.iloc[aux_indices].reset_index(drop=True)
+    x_idx = rng.integers(0, len(non_members))
+    x_row = non_members.iloc[x_idx : x_idx + 1].reset_index(drop=True)
+
+    train_in_k = pd.concat([base_aux_k, target_row], axis=0, ignore_index=True)
+    train_in_k = _prepare_train_df_for_model(train_in_k)
+    train_out_k = pd.concat([base_aux_k, x_row], axis=0, ignore_index=True)
+    train_out_k = _prepare_train_df_for_model(train_out_k)
+
+    train_in_transformed = preproc.transform(train_in_k)
+    train_out_transformed = preproc.transform(train_out_k)
+
+    model_in = _instantiate_model_from_cfg(model_cfg, seed + k * 2)
+    model_in.fit(train_in_transformed, schema)
+    synth_in = model_in.sample(synth_rows)
+    synth_in = preproc.inverse_transform(synth_in)
+    out_in_path = target_dir / f"synthetic_round_{k}_in.csv"
+    synth_in.to_csv(out_in_path, index=False)
+
+    model_out = _instantiate_model_from_cfg(model_cfg, seed + k * 2 + 1)
+    model_out.fit(train_out_transformed, schema)
+    synth_out = model_out.sample(synth_rows)
+    synth_out = preproc.inverse_transform(synth_out)
+    out_out_path = target_dir / f"synthetic_round_{k}_out.csv"
+    synth_out.to_csv(out_out_path, index=False)
+
+    return f"target_{t_idx} round_{k}"
 
 
 def run_shadow_generation(
@@ -126,6 +195,14 @@ def run_shadow_generation(
     num_rounds = int(shadow_cfg.get("num_shadow_rounds", 1))
     strategy = str(shadow_cfg.get("target_selection_strategy", "random_k"))
     max_targets = int(shadow_cfg.get("max_targets", 10))
+
+    num_workers = int(shadow_cfg.get("num_workers", 32))
+    gpu_ids_raw = shadow_cfg.get("gpu_ids")
+    if gpu_ids_raw is not None:
+        gpu_ids = [int(x) for x in OmegaConf.to_container(gpu_ids_raw, resolve=True)]
+    else:
+        num_gpus = int(shadow_cfg.get("num_gpus", 8))
+        gpu_ids = list(range(num_gpus))
 
     # 加载数据
     candidate_df = pd.read_csv(candidate_path)

@@ -7,3 +7,7 @@ max_targets: 10                       # random_k 策略下随机选取的 target
 shadow_train_rows: null               # null 表示使用主流程的 train_rows
 shadow_synthetic_rows: null           # null 表示使用主流程的 synthetic_rows
 random_seed: null                     # null 表示使用主流程的 seed
+
+# 并行：多进程执行，每进程绑定一个 GPU
+num_workers: 32                       # 并行任务数（进程数）
+gpu_ids: [0, 1, 2, 3, 4, 5, 6, 7]     # 使用的 GPU 列表，任务按 job_index % len(gpu_ids) 轮询分配，默认 8 卡各跑 4 任务
