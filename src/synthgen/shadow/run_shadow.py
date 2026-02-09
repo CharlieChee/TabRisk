@@ -10,6 +10,7 @@ Shadow 数据生成流程（严格 leave-one-out 语义）。
 shadow_model=true 时支持多进程并行（num_workers × gpu_ids），每进程绑定一个 GPU。
 """
 
+import multiprocessing
 import os
 from concurrent.futures import ProcessPoolExecutor, as_completed
 from pathlib import Path
@@ -196,13 +197,24 @@ def run_shadow_generation(
     strategy = str(shadow_cfg.get("target_selection_strategy", "random_k"))
     max_targets = int(shadow_cfg.get("max_targets", 10))
 
-    num_workers = int(shadow_cfg.get("num_workers", 32))
+    # 并行配置：确保为整数/列表，避免 OmegaConf 返回 None 或错误类型导致误走顺序分支
+    _nw = shadow_cfg.get("num_workers", 32)
+    try:
+        num_workers = int(_nw) if _nw is not None else 32
+    except (TypeError, ValueError):
+        num_workers = 32
+    num_workers = max(1, num_workers)
+
     gpu_ids_raw = shadow_cfg.get("gpu_ids")
     if gpu_ids_raw is not None:
-        gpu_ids = [int(x) for x in OmegaConf.to_container(gpu_ids_raw, resolve=True)]
+        _list = OmegaConf.to_container(gpu_ids_raw, resolve=True) or []
+        gpu_ids = [int(x) for x in _list]
     else:
-        num_gpus = int(shadow_cfg.get("num_gpus", 8))
-        gpu_ids = list(range(num_gpus))
+        _ng = shadow_cfg.get("num_gpus", 8)
+        num_gpus = int(_ng) if _ng is not None else 8
+        gpu_ids = list(range(max(1, num_gpus)))
+    if not gpu_ids:
+        gpu_ids = list(range(8))
 
     # 加载数据
     candidate_df = pd.read_csv(candidate_path)
@@ -241,63 +253,55 @@ def run_shadow_generation(
         )
         return
 
-    # 预处理器：与主流程一致，fit 于主训练集（train_members），仅做 transform 时与主 run 一致
-    fit_df = _prepare_train_df_for_model(train_members)
-    preproc = _load_preprocessor(run_dir, fit_df)
-
-    model_cfg = run_cfg.model
+    # 预处理器在子进程内按需加载，此处仅做目录与任务列表准备
     shadow_dir = run_dir / "shadow"
     shadow_dir.mkdir(parents=True, exist_ok=True)
 
+    # 构建所有 (t_idx, target_idx, k) 任务，并按 job_index 分配 gpu_id
+    run_dir_str = str(run_dir.resolve())
+    job_tuples = [
+        (t_idx, target_idx, k)
+        for t_idx, target_idx in enumerate(targets)
+        for k in range(num_rounds)
+    ]
+    job_args = [
+        (
+            run_dir_str,
+            t_idx,
+            target_idx,
+            k,
+            gpu_ids[j % len(gpu_ids)] if gpu_ids else 0,
+            N,
+            n_base,
+            synth_rows,
+            seed,
+        )
+        for j, (t_idx, target_idx, k) in enumerate(job_tuples)
+    ]
+
     logger.info(
-        f"Shadow 开始：targets={len(targets)}, rounds={num_rounds}, N={N}, "
-        f"synthetic_rows={synth_rows}, seed={seed}"
+        f"Shadow 开始：targets={len(targets)}, rounds={num_rounds}, jobs={len(job_args)}, "
+        f"num_workers={num_workers}, gpu_ids={gpu_ids}, N={N}, synthetic_rows={synth_rows}, seed={seed}"
     )
 
-    for t_idx, target_idx in enumerate(targets):
-        target_row = train_members.iloc[target_idx : target_idx + 1]
-        target_dir = shadow_dir / f"target_{t_idx}"
-        target_dir.mkdir(parents=True, exist_ok=True)
-
-        for k in range(num_rounds):
-            rng = np.random.default_rng(seed + t_idx * 10000 + k)
-
-            # 1. 从 aux 一次性抽取 base_aux_k（in/out 共用）
-            aux_indices = rng.choice(len(aux_df), size=n_base, replace=False)
-            base_aux_k = aux_df.iloc[aux_indices].reset_index(drop=True)
-
-            # 2. 选择 x（non-member，x != target）
-            x_idx = rng.integers(0, len(non_members))
-            x_row = non_members.iloc[x_idx : x_idx + 1].reset_index(drop=True)
-
-            # 3. 构造 train_in_k = base_aux_k ∪ {target}
-            train_in_k = pd.concat([base_aux_k, target_row], axis=0, ignore_index=True)
-            train_in_k = _prepare_train_df_for_model(train_in_k)
-
-            # 4. 构造 train_out_k = base_aux_k ∪ {x}
-            train_out_k = pd.concat([base_aux_k, x_row], axis=0, ignore_index=True)
-            train_out_k = _prepare_train_df_for_model(train_out_k)
-
-            # 5. 预变换
-            train_in_transformed = preproc.transform(train_in_k)
-            train_out_transformed = preproc.transform(train_out_k)
-
-            # 6. 训练并生成 in
-            model_in = _instantiate_model_from_cfg(model_cfg, seed + k * 2)
-            model_in.fit(train_in_transformed, schema)
-            synth_in = model_in.sample(synth_rows)
-            synth_in = preproc.inverse_transform(synth_in)
-            out_in_path = target_dir / f"synthetic_round_{k}_in.csv"
-            synth_in.to_csv(out_in_path, index=False)
-            logger.info(f"Shadow target_{t_idx} round_{k} in 已保存: {out_in_path}")
-
-            # 7. 训练并生成 out
-            model_out = _instantiate_model_from_cfg(model_cfg, seed + k * 2 + 1)
-            model_out.fit(train_out_transformed, schema)
-            synth_out = model_out.sample(synth_rows)
-            synth_out = preproc.inverse_transform(synth_out)
-            out_out_path = target_dir / f"synthetic_round_{k}_out.csv"
-            synth_out.to_csv(out_out_path, index=False)
-            logger.info(f"Shadow target_{t_idx} round_{k} out 已保存: {out_out_path}")
+    use_parallel = num_workers > 1 and len(gpu_ids) > 0
+    if not use_parallel:
+        logger.info("Shadow 使用顺序执行（num_workers=%s, len(gpu_ids)=%s）", num_workers, len(gpu_ids))
+        for args in job_args:
+            _run_one_shadow_job(args)
+    else:
+        # 使用 spawn 启动子进程，避免 fork 继承主进程 CUDA 上下文导致所有任务挤在同一张卡
+        workers = min(num_workers, len(job_args))
+        ctx = multiprocessing.get_context("spawn")
+        logger.info("Shadow 使用多进程并行: workers=%s, spawn 启动（避免 CUDA fork 继承）", workers)
+        with ProcessPoolExecutor(max_workers=workers, mp_context=ctx) as executor:
+            futures = {executor.submit(_run_one_shadow_job, args): args for args in job_args}
+            for future in as_completed(futures):
+                try:
+                    result = future.result()
+                    if result:
+                        logger.debug(f"Shadow 完成: {result}")
+                except Exception as e:
+                    logger.exception(f"Shadow 任务失败: {e}")
 
     logger.info(f"Shadow 完成: {shadow_dir}")
