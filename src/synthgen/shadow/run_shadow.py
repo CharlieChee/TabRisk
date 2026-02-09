@@ -103,21 +103,26 @@ def _run_one_shadow_job(args: Tuple) -> Optional[str]:
     candidate_df = pd.read_csv(run_dir / "candidate.csv")
     aux_df = pd.read_csv(run_dir / "aux.csv")
     schema = Schema.load(str(run_dir / "schema.json"))
-    train_members = candidate_df[candidate_df[SHADOW_MEMBER_COL] == 1].reset_index(drop=True)
-    non_members = candidate_df[candidate_df[SHADOW_MEMBER_COL] == 0].reset_index(drop=True)
-    fit_df = _prepare_train_df_for_model(train_members)
+    n_member = int((candidate_df[SHADOW_MEMBER_COL] == 1).sum())
+    non_member_candidate_indices = list(range(n_member, len(candidate_df)))
+    fit_df = _prepare_train_df_for_model(candidate_df[candidate_df[SHADOW_MEMBER_COL] == 1])
     preproc = _load_preprocessor(run_dir, fit_df)
     model_cfg = run_cfg.model
 
-    target_row = train_members.iloc[target_idx : target_idx + 1]
+    # target_idx 为 candidate 中的行号（candidate_row_idx）
+    target_row = candidate_df.iloc[target_idx : target_idx + 1].reset_index(drop=True)
     target_dir = run_dir / "shadow" / f"target_{t_idx}"
     target_dir.mkdir(parents=True, exist_ok=True)
 
     rng = np.random.default_rng(seed + t_idx * 10000 + k)
     aux_indices = rng.choice(len(aux_df), size=n_base, replace=False)
     base_aux_k = aux_df.iloc[aux_indices].reset_index(drop=True)
-    x_idx = rng.integers(0, len(non_members))
-    x_row = non_members.iloc[x_idx : x_idx + 1].reset_index(drop=True)
+    # x 为 non-member 且 x != target，保证 in/out 仅差 target 这一条
+    x_candidates = [i for i in non_member_candidate_indices if i != target_idx]
+    if not x_candidates:
+        x_candidates = [i for i in range(len(candidate_df)) if i != target_idx]
+    x_candidate_idx = int(rng.choice(x_candidates))
+    x_row = candidate_df.iloc[x_candidate_idx : x_candidate_idx + 1].reset_index(drop=True)
 
     train_in_k = pd.concat([base_aux_k, target_row], axis=0, ignore_index=True)
     train_in_k = _prepare_train_df_for_model(train_in_k)
@@ -203,6 +208,7 @@ def run_shadow_generation(
     num_rounds = int(shadow_cfg.get("num_shadow_rounds", 1))
     strategy = str(shadow_cfg.get("target_selection_strategy", "random_k"))
     max_targets = int(shadow_cfg.get("max_targets", 10))
+    target_mix = bool(shadow_cfg.get("target_mix", True))
 
     # 并行配置：确保为整数/列表，避免 OmegaConf 返回 None 或错误类型导致误走顺序分支
     _nw = shadow_cfg.get("num_workers", 32)
@@ -234,24 +240,45 @@ def run_shadow_generation(
 
     train_members = candidate_df[candidate_df[SHADOW_MEMBER_COL] == 1].reset_index(drop=True)
     non_members = candidate_df[candidate_df[SHADOW_MEMBER_COL] == 0].reset_index(drop=True)
+    n_member = len(train_members)
+    n_non_member = len(non_members)
+    # candidate 中 member 行为 0..n_member-1，non-member 行为 n_member..n_member+n_non_member-1
+    member_candidate_indices = list(range(0, n_member))
+    non_member_candidate_indices = list(range(n_member, n_member + n_non_member))
 
-    if len(train_members) == 0:
+    if n_member == 0:
         logger.warning("Shadow 跳过：无 train member 可作为 target")
         return
-    if len(non_members) == 0:
+    if n_non_member == 0:
         logger.warning("Shadow 跳过：无 non-member，无法构造 out 训练集")
         return
 
-    # 选择 targets
-    if strategy == "all":
-        targets = list(range(len(train_members)))
+    rng = np.random.default_rng(seed)
+    # targets = 候选人在 candidate.csv 中的行号列表（candidate_row_idx）
+    if target_mix:
+        # 混合：约一半来自 train，一半来自 non-member，便于 MIA 正负样本平衡
+        if strategy == "all":
+            targets = member_candidate_indices + non_member_candidate_indices
+            rng.shuffle(targets)
+        else:
+            n_from_member = min(max_targets // 2, n_member)
+            n_from_non = min(max_targets - n_from_member, n_non_member)
+            if n_from_non < max_targets - n_from_member:
+                n_from_member = min(max_targets - n_from_non, n_member)
+            chosen_m = rng.choice(member_candidate_indices, size=min(n_from_member, len(member_candidate_indices)), replace=False)
+            chosen_n = rng.choice(non_member_candidate_indices, size=min(n_from_non, len(non_member_candidate_indices)), replace=False)
+            targets = np.concatenate([np.atleast_1d(chosen_m), np.atleast_1d(chosen_n)]).astype(int).tolist()
+            rng.shuffle(targets)
     else:
-        n_t = min(max_targets, len(train_members))
-        rng = np.random.default_rng(seed)
-        targets = rng.choice(len(train_members), size=n_t, replace=False).tolist()
+        # 仅从 train 选取（旧逻辑）
+        if strategy == "all":
+            targets = member_candidate_indices.copy()
+        else:
+            n_t = min(max_targets, n_member)
+            targets = rng.choice(member_candidate_indices, size=n_t, replace=False).tolist()
 
     if N is None:
-        N = len(train_members)
+        N = n_member
     n_base = N - 1
 
     if len(aux_df) < n_base:
@@ -265,18 +292,18 @@ def run_shadow_generation(
     shadow_dir.mkdir(parents=True, exist_ok=True)
 
     # 保存 target 清单：每个 target_0, target_1, ... 对应 candidate 中哪一行、是否 member、来源等，便于 MIA 评估与复现
-    # candidate 前 len(train_members) 行为 train（is_member=1），故 candidate_row_idx = target_idx_in_train_members
     manifest_rows = []
-    for t_idx, target_idx in enumerate(targets):
-        candidate_row_idx = int(target_idx)  # 在 candidate.csv 中的行号（member 段即 train 顺序）
+    for t_idx, candidate_row_idx in enumerate(targets):
+        candidate_row_idx = int(candidate_row_idx)
         row = candidate_df.iloc[candidate_row_idx]
+        is_member = int(row[SHADOW_MEMBER_COL]) if SHADOW_MEMBER_COL in row else 0
         manifest_rows.append({
             "target_idx": t_idx,
             "target_dir": f"target_{t_idx}",
             "candidate_row_idx": candidate_row_idx,
-            "train_row_idx": candidate_row_idx,
-            "is_member": int(row[SHADOW_MEMBER_COL]) if SHADOW_MEMBER_COL in row else 1,
-            "source": "train",
+            "train_row_idx": candidate_row_idx if is_member else -1,
+            "is_member": is_member,
+            "source": "train" if is_member else "out_candidate",
             "row_hash": _row_content_hash(row),
         })
     manifest_df = pd.DataFrame(manifest_rows)

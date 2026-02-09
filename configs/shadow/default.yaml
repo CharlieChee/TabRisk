@@ -4,6 +4,7 @@
 num_shadow_rounds: 1
 target_selection_strategy: random_k   # random_k | all
 max_targets: 10                       # random_k 策略下随机选取的 target 数量
+target_mix: true                      # true：target 从 train 与 non-member 各约一半选取（用于平衡 MIA）；false：仅从 train 选取
 shadow_train_rows: null               # null 表示使用主流程的 train_rows
 shadow_synthetic_rows: null           # null 表示使用主流程的 synthetic_rows
 random_seed: null                     # null 表示使用主流程的 seed
