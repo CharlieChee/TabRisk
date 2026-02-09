@@ -390,6 +390,20 @@ def main(cfg: DictConfig) -> None:
     holdout_df.to_csv(test_path, index=False)
     logger.info(f"Holdout 评估数据已保存: {test_path} ({len(holdout_df)} 行)")
 
+    # Shadow Modelling：仅在 shadow_model=true 时生成 candidate/aux
+    shadow_model_enabled = getattr(cfg, "shadow_model", False) or False
+    if shadow_model_enabled:
+        from synthgen.utils.shadow_data import generate_candidate_and_aux
+
+        n_out = int(train_rows) if train_rows is not None and int(train_rows) > 0 else len(df)
+        generate_candidate_and_aux(
+            train_df=df,
+            test_df=holdout_df,
+            output_dir=output_dir,
+            n_out_candidate=n_out,
+            random_state=cfg.seed,
+        )
+
     # 保存预处理规则（便于复现）
     preprocess_path = output_dir / "preprocess.json"
     with open(preprocess_path, "w", encoding="utf-8") as f:
@@ -443,6 +457,21 @@ def main(cfg: DictConfig) -> None:
                 run_evaluation(eval_cfg)
             except Exception as e:
                 logger.warning(f"自动评估 evaluator={ev_name} 失败: {e}")
+
+    # Shadow Modelling：仅在 shadow_model=true 时执行 leave-one-out 影子数据生成
+    if shadow_model_enabled:
+        try:
+            from synthgen.shadow.run_shadow import run_shadow_generation
+
+            logger.info("开始 Shadow 数据生成...")
+            run_shadow_generation(
+                run_dir=output_dir,
+                cfg=cfg,
+                project_root=project_root,
+            )
+        except Exception as e:
+            logger.warning(f"Shadow 数据生成失败: {e}")
+            raise
 
 
 if __name__ == "__main__":

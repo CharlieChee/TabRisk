@@ -2,6 +2,7 @@ defaults:
   - model: ctgan
   - data: demo
   - preprocess: none
+  - shadow: default
   - _self_
 
 # 训练配置
@@ -26,3 +27,7 @@ synthetic_rows: 1000
 
 # 训练保存完成后是否自动在该 run 目录下执行评估（sdv + synthcity 两种）
 auto_evaluate: true
+
+# Shadow Modelling（Groundhog 风格）：shadow_model=true 时在主训练完成后生成影子 synthetic 数据
+# 用于 dataset-level targeted MIA；默认 false 时程序行为与当前完全一致
+shadow_model: false

@@ -1,0 +1,9 @@
+# Shadow Modelling 配置（仅在 shadow_model=true 时生效）
+# 用于 dataset-level targeted MIA，leave-one-out 语义
+
+num_shadow_rounds: 1
+target_selection_strategy: random_k   # random_k | all
+max_targets: 10                       # random_k 策略下随机选取的 target 数量
+shadow_train_rows: null               # null 表示使用主流程的 train_rows
+shadow_synthetic_rows: null           # null 表示使用主流程的 synthetic_rows
+random_seed: null                     # null 表示使用主流程的 seed
