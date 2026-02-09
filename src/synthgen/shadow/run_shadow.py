@@ -10,6 +10,7 @@ Shadow 数据生成流程（严格 leave-one-out 语义）。
 shadow_model=true 时支持多进程并行（num_workers × gpu_ids），每进程绑定一个 GPU。
 """
 
+import hashlib
 import multiprocessing
 import os
 from concurrent.futures import ProcessPoolExecutor, as_completed
@@ -57,6 +58,12 @@ def _load_preprocessor(run_dir: Path, fit_on: pd.DataFrame) -> Any:
     # fit 以恢复 _log1p_applied 等内部状态
     preproc.fit(fit_on)
     return preproc
+
+
+def _row_content_hash(row: pd.Series) -> str:
+    """对一行数据做稳定哈希，便于在 manifest 中标识该记录。"""
+    key = "_".join(str(v) for v in row.astype(str).tolist())
+    return hashlib.sha256(key.encode("utf-8")).hexdigest()[:16]
 
 
 def _prepare_train_df_for_model(df: pd.DataFrame, member_col: str = SHADOW_MEMBER_COL) -> pd.DataFrame:
@@ -256,6 +263,26 @@ def run_shadow_generation(
     # 预处理器在子进程内按需加载，此处仅做目录与任务列表准备
     shadow_dir = run_dir / "shadow"
     shadow_dir.mkdir(parents=True, exist_ok=True)
+
+    # 保存 target 清单：每个 target_0, target_1, ... 对应 candidate 中哪一行、是否 member、来源等，便于 MIA 评估与复现
+    # candidate 前 len(train_members) 行为 train（is_member=1），故 candidate_row_idx = target_idx_in_train_members
+    manifest_rows = []
+    for t_idx, target_idx in enumerate(targets):
+        candidate_row_idx = int(target_idx)  # 在 candidate.csv 中的行号（member 段即 train 顺序）
+        row = candidate_df.iloc[candidate_row_idx]
+        manifest_rows.append({
+            "target_idx": t_idx,
+            "target_dir": f"target_{t_idx}",
+            "candidate_row_idx": candidate_row_idx,
+            "train_row_idx": candidate_row_idx,
+            "is_member": int(row[SHADOW_MEMBER_COL]) if SHADOW_MEMBER_COL in row else 1,
+            "source": "train",
+            "row_hash": _row_content_hash(row),
+        })
+    manifest_df = pd.DataFrame(manifest_rows)
+    manifest_path = shadow_dir / "target_manifest.csv"
+    manifest_df.to_csv(manifest_path, index=False)
+    logger.info(f"Shadow target 清单已保存: {manifest_path} ({len(manifest_df)} 条)")
 
     # 构建所有 (t_idx, target_idx, k) 任务，并按 job_index 分配 gpu_id
     run_dir_str = str(run_dir.resolve())
