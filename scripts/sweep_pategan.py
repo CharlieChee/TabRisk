@@ -29,7 +29,7 @@ def run_one(bs: int, n_iter: int, gpu_id: int) -> dict:
     run_name = f"bs{bs}_iter{n_iter}"
     output_dir_rel = f"outputs/sweep_pategan/{run_name}"
 
-    # 这里将 train_rows 设为 2000，确保 batch_size<=train_rows/2 对三种 bs 都成立
+    # train_rows=synthetic_rows=1000
     cmd = [
         "python",
         "-m",
@@ -38,8 +38,8 @@ def run_one(bs: int, n_iter: int, gpu_id: int) -> dict:
         "model=pategan",
         "model.params.device=cuda",
         "preprocess=monotonic",
-        "train_rows=2000",
-        "synthetic_rows=2000",
+        "train_rows=1000",
+        "synthetic_rows=1000",
         "use_detailed_output_dir=false",
         f"output_dir={output_dir_rel}",
         f"model.params.batch_size={bs}",
