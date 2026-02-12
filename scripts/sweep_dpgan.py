@@ -147,7 +147,9 @@ def main():
                 )
                 err_str = f" ({r['error']})" if r["error"] else ""
                 print(
-                    f"[Done] bs={r['bs']} n_iter={r['n_iter']} -> Overall Score: {score_str}{err_str}"
+                    f"[Done] bs={r['bs']} n_iter={r['n_iter']} "
+                    f"eps={r['epsilon']} clip={r['clipping_value']} "
+                    f"-> Overall Score: {score_str}{err_str}"
                 )
             except Exception as e:
                 print(f"[Done] bs={bs} n_iter={n_iter} eps={eps} clip={clip} -> Error: {e}")
