@@ -22,16 +22,14 @@ def main():
     plugins = Plugins()
     plugin_name = "pategan"
 
-    # 1) 打印 PATEGAN 插件 __init__ 支持的参数名
-    plugin_cls = None
-    if hasattr(plugins, "_plugins") and isinstance(getattr(plugins, "_plugins"), dict):
-        plugin_cls = plugins._plugins.get(plugin_name)
-    if plugin_cls is None and hasattr(plugins, "plugins") and isinstance(getattr(plugins, "plugins"), dict):
-        plugin_cls = plugins.plugins.get(plugin_name)
-
-    if plugin_cls is None:
-        print(f"[ERROR] 未找到 SynthCity 插件: {plugin_name}")
+    # 1) 通过 Plugins().get 实例化一次 PATEGAN，然后从实例拿 class 和 __init__ 签名
+    try:
+        plugin = plugins.get(plugin_name, random_state=42)
+    except Exception as e:
+        print(f"[ERROR] plugins.get('{plugin_name}') 失败: {e!r}")
         return
+
+    plugin_cls = plugin.__class__
 
     import inspect
     sig = inspect.signature(plugin_cls.__init__)
