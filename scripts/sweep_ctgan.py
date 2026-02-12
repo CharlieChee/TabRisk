@@ -28,7 +28,7 @@ OUTPUT_BASE = PROJECT_ROOT / "outputs" / "sweep_ctgan"
 
 # Sweep 网格：batch_size 固定 1024，仅扫 n_iter
 BATCH_SIZE = 1024
-N_ITERS = [10, 20, 30, 50, 100, 300]
+N_ITERS = [150, 200, 250, 300, 350, 400]
 
 # 并行 GPU 数量（根据实际机器调整）
 NUM_GPUS = 8
