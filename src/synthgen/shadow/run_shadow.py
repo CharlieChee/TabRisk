@@ -84,6 +84,10 @@ def _run_one_shadow_job(args: Tuple) -> Optional[str]:
     单任务：在指定 GPU 上完成一个 (target_idx, round_k) 的 in/out 训练与合成。
     供多进程调用，必须为模块级函数且参数可 pickle。
     args: (run_dir_str, t_idx, target_idx, k, gpu_id, N, n_base, synth_rows, seed)
+
+    注意：
+    - 此函数用于 legacy 引擎的 ProcessPoolExecutor 路径，保持原有行为不变；
+    - 高性能 worker 引擎不会调用该函数，而是复用内部逻辑以减少重复 I/O。
     """
     (
         run_dir_str,
@@ -149,7 +153,7 @@ def _run_one_shadow_job(args: Tuple) -> Optional[str]:
     return f"target_{t_idx} round_{k}"
 
 
-def run_shadow_generation(
+def _run_shadow_generation_legacy(
     run_dir: Path,
     cfg: DictConfig,
     project_root: Path,
@@ -359,3 +363,305 @@ def run_shadow_generation(
                     logger.exception(f"Shadow 任务失败: {e}")
 
     logger.info(f"Shadow 完成: {shadow_dir}")
+
+
+def _shadow_worker_process(
+    run_dir_str: str,
+    gpu_id: int,
+    jobs: List[Tuple[int, int, int]],
+    N: int,
+    n_base: int,
+    synth_rows: int,
+    seed: int,
+) -> None:
+    """
+    高性能 Shadow worker 进程。
+
+    - 每个进程绑定到单个 GPU（通过 CUDA_VISIBLE_DEVICES）；
+    - 在进程启动后一次性加载 candidate/aux/schema/preprocessor；
+    - 顺序执行分配给该 GPU 的所有 (t_idx, target_idx, k) 任务；
+    - 内部逻辑与 _run_one_shadow_job 完全对齐，以保持 MIA 语义。
+    """
+    run_dir = Path(run_dir_str)
+    os.environ["CUDA_VISIBLE_DEVICES"] = str(gpu_id)
+    logger.info(
+        f"[worker] GPU {gpu_id}: start, jobs={len(jobs)}, N={N}, n_base={n_base}, synth_rows={synth_rows}, seed={seed}"
+    )
+
+    # 加载配置与数据：每个 worker 进程只执行一次
+    run_cfg = OmegaConf.load(run_dir / "train_config.yaml")
+    candidate_df = pd.read_csv(run_dir / "candidate.csv")
+    aux_df = pd.read_csv(run_dir / "aux.csv")
+    schema = Schema.load(str(run_dir / "schema.json"))
+    n_member = int((candidate_df[SHADOW_MEMBER_COL] == 1).sum())
+    non_member_candidate_indices = list(range(n_member, len(candidate_df)))
+
+    # 预处理器：仅在 member 行上 fit 一次，复用到所有任务
+    fit_df = _prepare_train_df_for_model(candidate_df[candidate_df[SHADOW_MEMBER_COL] == 1])
+    preproc = _load_preprocessor(run_dir, fit_df)
+    model_cfg = run_cfg.model
+
+    for (t_idx, target_idx, k) in jobs:
+        # target_idx 为 candidate 中的行号（candidate_row_idx）
+        target_row = candidate_df.iloc[target_idx : target_idx + 1].reset_index(drop=True)
+        target_dir = run_dir / "shadow" / f"target_{t_idx}"
+        target_dir.mkdir(parents=True, exist_ok=True)
+
+        rng = np.random.default_rng(seed + t_idx * 10000 + k)
+        aux_indices = rng.choice(len(aux_df), size=n_base, replace=False)
+        base_aux_k = aux_df.iloc[aux_indices].reset_index(drop=True)
+
+        # x 为 non-member 且 x != target，保证 in/out 仅差 target 这一条
+        x_candidates = [i for i in non_member_candidate_indices if i != target_idx]
+        if not x_candidates:
+            x_candidates = [i for i in range(len(candidate_df)) if i != target_idx]
+        x_candidate_idx = int(rng.choice(x_candidates))
+        x_row = candidate_df.iloc[x_candidate_idx : x_candidate_idx + 1].reset_index(drop=True)
+
+        train_in_k = pd.concat([base_aux_k, target_row], axis=0, ignore_index=True)
+        train_in_k = _prepare_train_df_for_model(train_in_k)
+        train_out_k = pd.concat([base_aux_k, x_row], axis=0, ignore_index=True)
+        train_out_k = _prepare_train_df_for_model(train_out_k)
+
+        train_in_transformed = preproc.transform(train_in_k)
+        train_out_transformed = preproc.transform(train_out_k)
+
+        # 注意：种子公式与 _run_one_shadow_job 完全一致
+        model_in = _instantiate_model_from_cfg(model_cfg, seed + k * 2)
+        model_in.fit(train_in_transformed, schema)
+        synth_in = model_in.sample(synth_rows)
+        synth_in = preproc.inverse_transform(synth_in)
+        out_in_path = target_dir / f"synthetic_round_{k}_in.csv"
+        synth_in.to_csv(out_in_path, index=False)
+
+        model_out = _instantiate_model_from_cfg(model_cfg, seed + k * 2 + 1)
+        model_out.fit(train_out_transformed, schema)
+        synth_out = model_out.sample(synth_rows)
+        synth_out = preproc.inverse_transform(synth_out)
+        out_out_path = target_dir / f"synthetic_round_{k}_out.csv"
+        synth_out.to_csv(out_out_path, index=False)
+
+        logger.debug(f"[worker] GPU {gpu_id}: done target_{t_idx} round_{k}")
+
+    logger.info(f"[worker] GPU {gpu_id}: all jobs done ({len(jobs)} jobs)")
+
+
+def _run_shadow_generation_worker(
+    run_dir: Path,
+    cfg: DictConfig,
+    project_root: Path,
+) -> None:
+    """
+    高性能 Shadow 引擎实现：每 GPU 一个长寿命 worker 进程。
+
+    语义保证：
+    - 与 legacy 引擎使用相同的 target 选择、N/n_base 计算、随机种子公式；
+    - 仅改变调度与数据加载方式（减少重复 I/O、进程创建和预处理开销）。
+    """
+    run_dir = Path(run_dir)
+    candidate_path = run_dir / "candidate.csv"
+    aux_path = run_dir / "aux.csv"
+    schema_path = run_dir / "schema.json"
+
+    if not candidate_path.exists() or not aux_path.exists():
+        logger.warning("Shadow 跳过：candidate.csv 或 aux.csv 不存在，请确保已生成 shadow 候选数据")
+        return
+    if not schema_path.exists():
+        logger.warning("Shadow 跳过：schema.json 不存在")
+        return
+
+    shadow_cfg = cfg.get("shadow") or OmegaConf.create({})
+    run_cfg = OmegaConf.load(run_dir / "train_config.yaml")
+
+    # 解析 shadow 参数，null 时回退到主流程配置
+    train_rows = OmegaConf.select(run_cfg, "train_rows", default=None)
+    synthetic_rows = int(OmegaConf.select(run_cfg, "synthetic_rows", default=0) or 0)
+    main_seed = int(OmegaConf.select(run_cfg, "seed", default=42) or 42)
+
+    N = shadow_cfg.get("shadow_train_rows")
+    if N is None:
+        N = train_rows
+    if N is None or (hasattr(N, "__iter__") and not isinstance(N, int)):
+        N = None
+    else:
+        N = int(N)
+
+    synth_rows = shadow_cfg.get("shadow_synthetic_rows")
+    if synth_rows is None:
+        synth_rows = synthetic_rows
+    if synth_rows is None:
+        synth_rows = 1000
+    synth_rows = int(synth_rows)
+
+    seed = shadow_cfg.get("random_seed")
+    if seed is None:
+        seed = main_seed
+    seed = int(seed)
+
+    num_rounds = int(shadow_cfg.get("num_shadow_rounds", 1))
+    strategy = str(shadow_cfg.get("target_selection_strategy", "random_k"))
+    max_targets = int(shadow_cfg.get("max_targets", 10))
+    target_mix = bool(shadow_cfg.get("target_mix", True))
+
+    # 并行配置：worker 引擎仅使用每 GPU 一个进程，忽略 num_workers
+    gpu_ids_raw = shadow_cfg.get("gpu_ids")
+    if gpu_ids_raw is not None:
+        _list = OmegaConf.to_container(gpu_ids_raw, resolve=True) or []
+        gpu_ids = [int(x) for x in _list]
+    else:
+        _ng = shadow_cfg.get("num_gpus", 8)
+        num_gpus = int(_ng) if _ng is not None else 8
+        gpu_ids = list(range(max(1, num_gpus)))
+    if not gpu_ids:
+        gpu_ids = list(range(8))
+
+    # 加载数据（仅在主进程执行一次）
+    candidate_df = pd.read_csv(candidate_path)
+    aux_df = pd.read_csv(aux_path)
+    schema = Schema.load(str(schema_path))
+
+    if SHADOW_MEMBER_COL not in candidate_df.columns:
+        logger.warning("Shadow 跳过：candidate.csv 缺少 is_member 列")
+        return
+
+    train_members = candidate_df[candidate_df[SHADOW_MEMBER_COL] == 1].reset_index(drop=True)
+    non_members = candidate_df[candidate_df[SHADOW_MEMBER_COL] == 0].reset_index(drop=True)
+    n_member = len(train_members)
+    n_non_member = len(non_members)
+    # candidate 中 member 行为 0..n_member-1，non-member 行为 n_member..n_member+n_non_member-1
+    member_candidate_indices = list(range(0, n_member))
+    non_member_candidate_indices = list(range(n_member, n_member + n_non_member))
+
+    if n_member == 0:
+        logger.warning("Shadow 跳过：无 train member 可作为 target")
+        return
+    if n_non_member == 0:
+        logger.warning("Shadow 跳过：无 non-member，无法构造 out 训练集")
+        return
+
+    rng = np.random.default_rng(seed)
+    # targets = 候选人在 candidate.csv 中的行号列表（candidate_row_idx）
+    if target_mix:
+        # 混合：约一半来自 train，一半来自 non-member，便于 MIA 正负样本平衡
+        if strategy == "all":
+            targets = member_candidate_indices + non_member_candidate_indices
+            rng.shuffle(targets)
+        else:
+            n_from_member = min(max_targets // 2, n_member)
+            n_from_non = min(max_targets - n_from_member, n_non_member)
+            if n_from_non < max_targets - n_from_member:
+                n_from_member = min(max_targets - n_from_non, n_member)
+            chosen_m = rng.choice(member_candidate_indices, size=min(n_from_member, len(member_candidate_indices)), replace=False)
+            chosen_n = rng.choice(non_member_candidate_indices, size=min(n_from_non, len(non_member_candidate_indices)), replace=False)
+            targets = np.concatenate([np.atleast_1d(chosen_m), np.atleast_1d(chosen_n)]).astype(int).tolist()
+            rng.shuffle(targets)
+    else:
+        # 仅从 train 选取（旧逻辑）
+        if strategy == "all":
+            targets = member_candidate_indices.copy()
+        else:
+            n_t = min(max_targets, n_member)
+            targets = rng.choice(member_candidate_indices, size=n_t, replace=False).tolist()
+
+    if N is None:
+        N = n_member
+    n_base = N - 1
+
+    if len(aux_df) < n_base:
+        logger.warning(
+            f"Shadow 跳过：aux 仅 {len(aux_df)} 行，需要至少 {n_base} 行作为 base_aux"
+        )
+        return
+
+    # 预处理器在 worker 进程内按需加载，此处仅做目录与任务列表准备
+    shadow_dir = run_dir / "shadow"
+    shadow_dir.mkdir(parents=True, exist_ok=True)
+
+    # 保存 target 清单：与 legacy 引擎保持完全一致
+    manifest_rows = []
+    for t_idx, candidate_row_idx in enumerate(targets):
+        candidate_row_idx = int(candidate_row_idx)
+        row = candidate_df.iloc[candidate_row_idx]
+        is_member = int(row[SHADOW_MEMBER_COL]) if SHADOW_MEMBER_COL in row else 0
+        manifest_rows.append({
+            "target_idx": t_idx,
+            "target_dir": f"target_{t_idx}",
+            "candidate_row_idx": candidate_row_idx,
+            "train_row_idx": candidate_row_idx if is_member else -1,
+            "is_member": is_member,
+            "source": "train" if is_member else "out_candidate",
+            "row_hash": _row_content_hash(row),
+        })
+    manifest_df = pd.DataFrame(manifest_rows)
+    manifest_path = shadow_dir / "target_manifest.csv"
+    manifest_df.to_csv(manifest_path, index=False)
+    logger.info(f"Shadow target 清单已保存: {manifest_path} ({len(manifest_df)} 条)")
+
+    # 构建所有 (t_idx, target_idx, k) 任务
+    run_dir_str = str(run_dir.resolve())
+    job_tuples = [
+        (t_idx, target_idx, k)
+        for t_idx, target_idx in enumerate(targets)
+        for k in range(num_rounds)
+    ]
+
+    # 按 GPU 轮询分配任务列表，确保与 legacy 路径的 job_index % len(gpu_ids) 策略一致
+    jobs_per_gpu: Dict[int, List[Tuple[int, int, int]]] = {g: [] for g in gpu_ids}
+    for j, (t_idx, target_idx, k) in enumerate(job_tuples):
+        gpu = gpu_ids[j % len(gpu_ids)] if gpu_ids else 0
+        jobs_per_gpu[gpu].append((t_idx, target_idx, k))
+
+    total_jobs = sum(len(v) for v in jobs_per_gpu.values())
+    logger.info(
+        f"Shadow(worker) 开始：targets={len(targets)}, rounds={num_rounds}, jobs={total_jobs}, "
+        f"gpu_ids={gpu_ids}, N={N}, synthetic_rows={synth_rows}, seed={seed}"
+    )
+
+    if total_jobs == 0:
+        logger.info("Shadow(worker)：无待执行的任务，直接返回")
+        return
+
+    ctx = multiprocessing.get_context("spawn")
+    processes: List[multiprocessing.Process] = []
+    for gpu, jobs in jobs_per_gpu.items():
+        if not jobs:
+            continue
+        p = ctx.Process(
+            target=_shadow_worker_process,
+            args=(run_dir_str, int(gpu), jobs, N, n_base, synth_rows, seed),
+        )
+        p.start()
+        processes.append(p)
+        logger.info(f"Shadow(worker)：已启动 worker 进程 pid={p.pid} 绑定 GPU {gpu}，jobs={len(jobs)}")
+
+    # 等待所有 worker 完成
+    for p in processes:
+        p.join()
+        if p.exitcode != 0:
+            logger.warning(f"Shadow(worker)：worker 进程 pid={p.pid} 非零退出码 {p.exitcode}")
+
+    logger.info(f"Shadow(worker) 完成: {shadow_dir}")
+
+
+def run_shadow_generation(
+    run_dir: Path,
+    cfg: DictConfig,
+    project_root: Path,
+) -> None:
+    """
+    Shadow 生成统一入口。
+
+    根据 cfg.shadow.engine 选择具体实现：
+    - legacy（默认）：使用现有的 ProcessPoolExecutor 实现，行为完全保持不变；
+    - worker：使用每 GPU 一个长寿命 worker 进程的高性能实现。
+    """
+    shadow_cfg = cfg.get("shadow") or OmegaConf.create({})
+    engine = str(shadow_cfg.get("engine", "legacy")).strip().lower()
+    if engine not in {"legacy", "worker"}:
+        logger.warning(f"未知的 shadow.engine={engine!r}，回退为 'legacy'")
+        engine = "legacy"
+
+    logger.info(f"Shadow 引擎选择: {engine}")
+    if engine == "worker":
+        return _run_shadow_generation_worker(run_dir, cfg, project_root)
+    return _run_shadow_generation_legacy(run_dir, cfg, project_root)

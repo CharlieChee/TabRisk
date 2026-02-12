@@ -12,3 +12,8 @@ random_seed: null                     # null 表示使用主流程的 seed
 # 并行：多进程执行，每进程绑定一个 GPU（需多卡时请勿在命令行限制 CUDA_VISIBLE_DEVICES，或设为 0,1,...,7）
 num_workers: 64                       # 并行任务数（8 卡 × 每卡 8 任务），约减半 CPU 负载
 gpu_ids: [0, 1, 2, 3, 4, 5, 6, 7]     # 使用的 GPU 物理编号，任务按 job_index % len(gpu_ids) 轮询分配
+
+# Shadow 引擎实现方式：
+# - legacy: 使用现有的基于 ProcessPoolExecutor 的实现（完全保持原有语义与行为）
+# - worker: 使用每 GPU 一个长寿命 worker 进程，复用内存与状态以提升性能（需要多卡环境）
+engine: legacy
