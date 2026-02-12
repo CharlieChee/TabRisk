@@ -1,16 +1,16 @@
 #!/usr/bin/env python3
 """
-CTGAN 超参扫描脚本：固定 train_rows=synthetic_rows=5000，仅扫 n_iter。
+CTGAN 超参扫描脚本：固定 train_rows=synthetic_rows=1000，仅扫 n_iter。
 
 配置：
   - data=standard/adult_openml
   - model=ctgan
   - preprocess=monotonic
   - model.params.device=cuda
-  - train_rows=5000
-  - synthetic_rows=5000
+  - train_rows=1000
+  - synthetic_rows=1000
   - batch_size=1024 固定
-  - n_iter ∈ {50, 100, 300, 500, 1000}
+  - n_iter ∈ {10, 20, 30, 50, 100, 300}
 
 用法（在项目根目录）：
     python scripts/sweep_ctgan.py
@@ -28,7 +28,7 @@ OUTPUT_BASE = PROJECT_ROOT / "outputs" / "sweep_ctgan"
 
 # Sweep 网格：batch_size 固定 1024，仅扫 n_iter
 BATCH_SIZE = 1024
-N_ITERS = [50, 100, 300, 500, 1000]
+N_ITERS = [10, 20, 30, 50, 100, 300]
 
 # 并行 GPU 数量（根据实际机器调整）
 NUM_GPUS = 8
@@ -47,8 +47,8 @@ def run_one(n_iter: int, gpu_id: int) -> dict:
         "model=ctgan",
         "model.params.device=cuda",
         "preprocess=monotonic",
-        "train_rows=5000",
-        "synthetic_rows=5000",
+        "train_rows=1000",
+        "synthetic_rows=1000",
         "use_detailed_output_dir=false",
         f"output_dir={output_dir_rel}",
         f"model.params.batch_size={BATCH_SIZE}",
