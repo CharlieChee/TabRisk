@@ -953,13 +953,19 @@ def _run_shadow_generation_reuse(
             in_dataset_id = _get_or_create_dataset_id(base_id, target_idx)
             usage_records.append((t_idx, k, "in", in_dataset_id))
 
-            # out 端：base_aux ∪ {x}，x 为 non-member 且 x != target
+            # out 端：base_aux ∪ {x}，优先从 non-member 中选取 x，保证与原逻辑一致：
+            # 1) 先在受限的 out_candidate_pool 内选非 target；
+            # 2) 若为空，退回到所有 non-member 中选非 target；
+            # 3) 若仍为空（极端情况：唯一 non-member 即为 target），
+            #    则退回到整个 candidate 中选非 target（与 legacy/worker 行为对齐）。
             valid_out_pool = [i for i in out_candidate_pool if i != target_idx]
             if not valid_out_pool:
                 valid_out_pool = [i for i in non_member_candidate_indices if i != target_idx]
             if not valid_out_pool:
+                valid_out_pool = [i for i in range(len(candidate_df)) if i != target_idx]
+            if not valid_out_pool:
                 logger.warning(
-                    f"Shadow(reuse)：无法为 target_idx={target_idx} 找到 non-member 替换样本，跳过该轮 k={k}"
+                    f"Shadow(reuse)：无法为 target_idx={target_idx} 找到替换样本，跳过该轮 k={k}"
                 )
                 continue
             x_candidate_idx = int(rng.choice(valid_out_pool))
