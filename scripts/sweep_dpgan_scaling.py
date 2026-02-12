@@ -48,10 +48,24 @@ N_VALUES = [2000, 5000, 10000]
 # epsilon 网格
 EPSILONS = [0.5, 1.0, 2.0, 5.0]
 
-# A/B/C 等效表（可根据需要自行修改）
-A_EQ_N_ITERS = {2000: 50, 5000: 20, 10000: 10}   # bs=256, clip=2
-B_EQ_N_ITERS = {2000: 100, 5000: 40, 10000: 20}  # bs=512, clip=2
-C_EQ_N_ITERS = {2000: 100, 5000: 40, 10000: 20}  # bs=512, clip=4（当前与 B 相同）
+# A/B/C 等效表（按你给出的配置重新设置）
+# ✅ N = 2000
+#   A-line: bs=256, n_iter=100, clip=2
+#   B-line: bs=512, n_iter=200, clip=2
+#   C-line: bs=512, n_iter=100, clip=4
+#
+# ✅ N = 5000
+#   A-line: bs=256, n_iter=250, clip=2
+#   B-line: bs=512, n_iter=500, clip=2
+#   C-line: bs=512, n_iter=250, clip=4
+#
+# ✅ N = 10000
+#   A-line: bs=256, n_iter=500, clip=2
+#   B-line: bs=512, n_iter=1000, clip=2
+#   C-line: bs=512, n_iter=500, clip=4
+A_EQ_N_ITERS = {2000: 100, 5000: 250, 10000: 500}    # bs=256, clip=2
+B_EQ_N_ITERS = {2000: 200, 5000: 500, 10000: 1000}   # bs=512, clip=2
+C_EQ_N_ITERS = {2000: 100, 5000: 250, 10000: 500}    # bs=512, clip=4
 
 # 并行 GPU 数量（根据实际机器调整）
 NUM_GPUS = 8
