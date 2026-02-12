@@ -20,12 +20,12 @@ OUTPUT_BASE = PROJECT_ROOT / "outputs" / "sweep_dpgan"
 #   - batch_size: 256, 512
 #   - n_iter: 50, 100
 #   - epsilon: 0.5, 1.0, 5.0   （隐私预算，越大隐私越弱、utility 越高）
-#   - clipping_value: 0.5, 1.0, 2.0   （生成器梯度裁剪阈值 C）
+#   - clipping_value: 1, 2, 4   （生成器梯度裁剪阈值 C，DPGAN 中该参数为整数，0=关闭）
 # 满足 batch_size <= train_rows/2，用 train_rows=2500
 BATCH_SIZES = [256, 512]
 N_ITERS = [50, 100]
 EPSILONS = [0.5, 1.0, 5.0]
-CLIPPING_VALUES = [0.5, 1.0, 2.0]
+CLIPPING_VALUES = [1, 2, 4]
 
 # 并行 GPU 数量（根据实际机器调整）
 NUM_GPUS = 8
