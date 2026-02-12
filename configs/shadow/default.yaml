@@ -18,6 +18,17 @@ gpu_ids: [0, 1, 2, 3, 4, 5, 6, 7]     # 使用的 GPU 物理编号，任务按 j
 # - worker: 使用每 GPU 一个或多个长寿命 worker 进程，复用内存与状态以提升性能（需要多卡环境）
 engine: legacy
 
+# 复用模式开关：
+# - false（默认）：不启用复用，完全保持原有逻辑与行为；
+# - true：启用复用模式，在内部对训练数据集进行全局去重，复用模型以减少训练开销。
+reuse_mode: false
+
+# 复用模式下的控制参数，仅在 reuse_mode=true 时生效：
+# - reuse_num_bases：全局生成的 base_aux（伴随样本集合）的种类数，数值越小，复用越多、训练模型越少；
+# - reuse_num_out_candidates：从 non-member 中选作 out 替换样本的候选个数，数值越小，out 训练集越容易重复。
+reuse_num_bases: 10
+reuse_num_out_candidates: 10
+
 # 当 engine=worker 时，每张 GPU 上最多同时运行的 worker 进程数。
 # 建议在 A800 这类卡上尝试 2~4，以提升 GPU 利用率；过大可能导致 CPU/I/O 争抢。
 worker_concurrency_per_gpu: 1
