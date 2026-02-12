@@ -503,7 +503,7 @@ def _run_shadow_generation_worker(
     max_targets = int(shadow_cfg.get("max_targets", 10))
     target_mix = bool(shadow_cfg.get("target_mix", True))
 
-    # 并行配置：worker 引擎仅使用每 GPU 一个进程，忽略 num_workers
+    # 并行配置：worker 引擎支持每 GPU 多个并发 worker 进程
     gpu_ids_raw = shadow_cfg.get("gpu_ids")
     if gpu_ids_raw is not None:
         _list = OmegaConf.to_container(gpu_ids_raw, resolve=True) or []
@@ -514,6 +514,13 @@ def _run_shadow_generation_worker(
         gpu_ids = list(range(max(1, num_gpus)))
     if not gpu_ids:
         gpu_ids = list(range(8))
+
+    _wc = shadow_cfg.get("worker_concurrency_per_gpu", 1)
+    try:
+        worker_concurrency = int(_wc) if _wc is not None else 1
+    except (TypeError, ValueError):
+        worker_concurrency = 1
+    worker_concurrency = max(1, worker_concurrency)
 
     # 加载数据（仅在主进程执行一次）
     candidate_df = pd.read_csv(candidate_path)
@@ -605,16 +612,24 @@ def _run_shadow_generation_worker(
         for k in range(num_rounds)
     ]
 
-    # 按 GPU 轮询分配任务列表，确保与 legacy 路径的 job_index % len(gpu_ids) 策略一致
-    jobs_per_gpu: Dict[int, List[Tuple[int, int, int]]] = {g: [] for g in gpu_ids}
-    for j, (t_idx, target_idx, k) in enumerate(job_tuples):
-        gpu = gpu_ids[j % len(gpu_ids)] if gpu_ids else 0
-        jobs_per_gpu[gpu].append((t_idx, target_idx, k))
+    # 构建 worker 槽位列表：[(gpu_id, slot_idx), ...]，用于轮询分配任务
+    worker_slots: List[Tuple[int, int]] = []
+    for gpu in gpu_ids:
+        for slot_idx in range(worker_concurrency):
+            worker_slots.append((gpu, slot_idx))
 
-    total_jobs = sum(len(v) for v in jobs_per_gpu.values())
+    jobs_per_slot: Dict[Tuple[int, int], List[Tuple[int, int, int]]] = {
+        slot: [] for slot in worker_slots
+    }
+    for j, (t_idx, target_idx, k) in enumerate(job_tuples):
+        slot = worker_slots[j % len(worker_slots)] if worker_slots else (gpu_ids[0], 0)
+        jobs_per_slot[slot].append((t_idx, target_idx, k))
+
+    total_jobs = sum(len(v) for v in jobs_per_slot.values())
     logger.info(
         f"Shadow(worker) 开始：targets={len(targets)}, rounds={num_rounds}, jobs={total_jobs}, "
-        f"gpu_ids={gpu_ids}, N={N}, synthetic_rows={synth_rows}, seed={seed}"
+        f"gpu_ids={gpu_ids}, worker_concurrency_per_gpu={worker_concurrency}, "
+        f"N={N}, synthetic_rows={synth_rows}, seed={seed}"
     )
 
     if total_jobs == 0:
@@ -623,7 +638,7 @@ def _run_shadow_generation_worker(
 
     ctx = multiprocessing.get_context("spawn")
     processes: List[multiprocessing.Process] = []
-    for gpu, jobs in jobs_per_gpu.items():
+    for (gpu, slot_idx), jobs in jobs_per_slot.items():
         if not jobs:
             continue
         p = ctx.Process(
@@ -632,7 +647,9 @@ def _run_shadow_generation_worker(
         )
         p.start()
         processes.append(p)
-        logger.info(f"Shadow(worker)：已启动 worker 进程 pid={p.pid} 绑定 GPU {gpu}，jobs={len(jobs)}")
+        logger.info(
+            f"Shadow(worker)：已启动 worker 进程 pid={p.pid} 绑定 GPU {gpu} 槽位 {slot_idx}，jobs={len(jobs)}"
+        )
 
     # 等待所有 worker 完成
     for p in processes:

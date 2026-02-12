@@ -15,5 +15,9 @@ gpu_ids: [0, 1, 2, 3, 4, 5, 6, 7]     # 使用的 GPU 物理编号，任务按 j
 
 # Shadow 引擎实现方式：
 # - legacy: 使用现有的基于 ProcessPoolExecutor 的实现（完全保持原有语义与行为）
-# - worker: 使用每 GPU 一个长寿命 worker 进程，复用内存与状态以提升性能（需要多卡环境）
+# - worker: 使用每 GPU 一个或多个长寿命 worker 进程，复用内存与状态以提升性能（需要多卡环境）
 engine: legacy
+
+# 当 engine=worker 时，每张 GPU 上最多同时运行的 worker 进程数。
+# 建议在 A800 这类卡上尝试 2~4，以提升 GPU 利用率；过大可能导致 CPU/I/O 争抢。
+worker_concurrency_per_gpu: 1
