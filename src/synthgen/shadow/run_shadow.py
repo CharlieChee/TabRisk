@@ -973,6 +973,51 @@ def _run_shadow_generation_reuse(
         f"num_bases={num_bases}, out_pool_size={num_out_pool}"
     )
 
+    # 保存复用模式下的数据集与使用关系的元数据，便于后续分析：
+    # - reuse_datasets.csv：每个 dataset_id 对应的 (base_id, candidate_idx) 以及该行是否 member 等信息；
+    # - reuse_usage.csv：每个 (target_idx, round, role) 对应使用了哪个 dataset_id。
+    reuse_datasets_rows = []
+    for dataset_id, (base_id, cand_idx) in enumerate(dataset_specs):
+        row = candidate_df.iloc[cand_idx]
+        is_member = int(row[SHADOW_MEMBER_COL]) if SHADOW_MEMBER_COL in row else 0
+        reuse_datasets_rows.append(
+            {
+                "dataset_id": dataset_id,
+                "base_id": int(base_id),
+                "candidate_row_idx": int(cand_idx),
+                "is_member": is_member,
+                "row_hash": _row_content_hash(row),
+            }
+        )
+    if reuse_datasets_rows:
+        reuse_datasets_df = pd.DataFrame(reuse_datasets_rows)
+        reuse_datasets_path = shadow_dir / "reuse_datasets.csv"
+        reuse_datasets_df.to_csv(reuse_datasets_path, index=False)
+        logger.info(
+            f"Shadow(reuse)：数据集清单已保存: {reuse_datasets_path} "
+            f"(unique_datasets={total_unique_datasets})"
+        )
+
+    reuse_usage_rows = []
+    for t_idx, k, role, dataset_id in usage_records:
+        reuse_usage_rows.append(
+            {
+                "target_idx": int(t_idx),
+                "round": int(k),
+                "role": str(role),
+                "dataset_id": int(dataset_id),
+                "synthetic_path": f"shadow/target_{t_idx}/synthetic_round_{k}_{role}.csv",
+            }
+        )
+    if reuse_usage_rows:
+        reuse_usage_df = pd.DataFrame(reuse_usage_rows)
+        reuse_usage_path = shadow_dir / "reuse_usage.csv"
+        reuse_usage_df.to_csv(reuse_usage_path, index=False)
+        logger.info(
+            f"Shadow(reuse)：使用关系清单已保存: {reuse_usage_path} "
+            f"(rows={len(reuse_usage_rows)})"
+        )
+
     if total_unique_datasets == 0:
         logger.info("Shadow(reuse)：无唯一数据集需要训练，直接返回")
         return
