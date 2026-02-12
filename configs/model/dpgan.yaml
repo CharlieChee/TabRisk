@@ -11,4 +11,7 @@ params:
   generator_n_units_hidden: 256
   discriminator_n_layers_hidden: 2
   discriminator_n_units_hidden: 256
+  # 差分隐私：clipping norm (C) 与 noise multiplier (σ)，命令行可覆盖
+  dp_max_grad_norm: 2.0       # clipping norm C，梯度裁剪阈值，如 model.params.dp_max_grad_norm=1.0
+  # noise_multiplier 若插件支持，可用 +model.params.noise_multiplier=1.0；先运行 python scripts/debug_dpgan_params.py 查看插件实际参数名
 
