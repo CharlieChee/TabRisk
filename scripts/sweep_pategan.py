@@ -16,9 +16,9 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 PROJECT_ROOT = Path(__file__).parent.parent
 OUTPUT_BASE = PROJECT_ROOT / "outputs" / "sweep_pategan"
 
-# Sweep 网格
-BATCH_SIZES = [128, 256, 512]
-N_ITERS = [300, 1000, 3000]
+# Sweep 网格：小 batch (32, 64, 128)，iter (100, 200, 300)，满足 batch_size <= train_rows/2
+BATCH_SIZES = [32, 64, 128]
+N_ITERS = [100, 200, 300]
 
 # 并行 GPU 数量（根据实际机器调整）
 NUM_GPUS = 8
