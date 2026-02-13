@@ -21,14 +21,17 @@
   # 从 run 目录下指定文件抽取 target（仅写文件名即可，如 original.csv）
   python scripts/match_target_demo.py --run-dir outputs/xxx --target-file original.csv --target-row 0
 
-  # 不指定 --target-row 时，遍历 target 文件每一行并汇总（各方法为“至少匹配任一 target”的 synthetic 条数）
+  # 不指定 --target-row 时，遍历 target 文件每一行并汇总（多进程并行，默认 16 进程）
   python scripts/match_target_demo.py --run-dir outputs/xxx --target-file original.csv
+  python scripts/match_target_demo.py --run-dir outputs/xxx --target-file original.csv --n-jobs 32
 """
 
 from __future__ import annotations
 
 import argparse
 import sys
+from collections import defaultdict
+from multiprocessing import Pool
 from pathlib import Path
 
 # 项目根
@@ -44,6 +47,53 @@ from synthgen.match import run_all_methods
 
 # 展示匹配行时最多显示条数
 MAX_SAMPLE_ROWS = 5
+DEFAULT_N_JOBS = 16
+
+
+def _match_chunk_worker(
+    chunk: tuple[
+        list[int],
+        pd.DataFrame,
+        pd.DataFrame,
+        object,
+        float,
+        object,
+        float,
+        float,
+        int,
+    ],
+) -> dict[str, tuple[set[int], list[tuple[int, int]]]]:
+    """处理一批 target 行，返回各方法的匹配索引集合与每行匹配数。供多进程调用。"""
+    (
+        indices,
+        synthetic,
+        target_chunk,
+        schema,
+        epsilon,
+        rel_epsilon,
+        l2_radius,
+        fraction,
+        n_bins,
+    ) = chunk
+    union = defaultdict(set)
+    per_target = defaultdict(list)
+    for k, target_idx in enumerate(indices):
+        target_row = target_chunk.iloc[k : k + 1]
+        results = run_all_methods(
+            synthetic,
+            target_row.iloc[0],
+            schema=schema,
+            epsilon=epsilon,
+            rel_epsilon=rel_epsilon,
+            l2_radius=l2_radius,
+            fraction=fraction,
+            n_bins=n_bins,
+        )
+        for method_name, (mask, _) in results.items():
+            idx_set = set(np.where(mask)[0])
+            union[method_name].update(idx_set)
+            per_target[method_name].append((target_idx, len(idx_set)))
+    return {m: (union[m], per_target[m]) for m in union}
 
 
 def _load_data(args: argparse.Namespace):
@@ -124,6 +174,7 @@ def main():
     parser.add_argument("--n-bins", type=int, default=10, help="连续列分箱数（方法四）")
     parser.add_argument("--max-sample-rows", type=int, default=MAX_SAMPLE_ROWS, help="每种方法最多展示的 synthetic 行数")
     parser.add_argument("--output-dir", type=str, default=None, help="将每种方法的 target + 匹配样本写入该目录")
+    parser.add_argument("--n-jobs", type=int, default=DEFAULT_N_JOBS, help="遍历整个 target 文件时的并行进程数（默认 16）")
     args = parser.parse_args()
 
     if args.synthetic and not args.candidate and not args.target_file:
@@ -160,26 +211,37 @@ def main():
     }
 
     if use_all_rows:
-        # 遍历每一行作为 target，各方法取匹配索引的并集，并记录每行匹配数
-        from collections import defaultdict
-        union_matched = defaultdict(set)  # method_name -> set(synthetic indices)
-        per_target_counts = defaultdict(list)  # method_name -> [(target_idx, count), ...]
-        for target_idx in target_indices:
-            target_row = target_source.iloc[target_idx : target_idx + 1]
-            results = run_all_methods(
-                synthetic,
-                target_row.iloc[0],
-                schema=schema,
-                epsilon=args.epsilon,
-                rel_epsilon=args.rel_epsilon,
-                l2_radius=args.l2_radius,
-                fraction=args.fraction,
-                n_bins=args.n_bins,
+        # 多进程遍历：每行作为 target，各方法取匹配索引的并集，并记录每行匹配数
+        n_jobs = max(1, args.n_jobs)
+        chunk_size = max(1, (len(target_indices) + n_jobs - 1) // n_jobs)
+        chunks = []
+        for i in range(0, len(target_indices), chunk_size):
+            idx_chunk = target_indices[i : i + chunk_size]
+            target_chunk = target_source.iloc[idx_chunk].reset_index(drop=True)
+            chunks.append(
+                (
+                    idx_chunk,
+                    synthetic,
+                    target_chunk,
+                    schema,
+                    args.epsilon,
+                    args.rel_epsilon,
+                    args.l2_radius,
+                    args.fraction,
+                    args.n_bins,
+                )
             )
-            for method_name, (mask, matched_df) in results.items():
-                idx_set = set(np.where(mask)[0])
-                union_matched[method_name].update(idx_set)
-                per_target_counts[method_name].append((target_idx, len(idx_set)))
+        union_matched = defaultdict(set)
+        per_target_counts = defaultdict(list)
+        print("Target 来源: {}（共 {} 行，并行进程数 {}）".format(target_source_name, len(target_indices), n_jobs))
+        with Pool(processes=n_jobs) as pool:
+            for part in pool.imap_unordered(_match_chunk_worker, chunks):
+                for method_name, (idx_set, counts) in part.items():
+                    union_matched[method_name].update(idx_set)
+                    per_target_counts[method_name].extend(counts)
+        # 按 target_row 排序，保证与顺序一致
+        for method_name in per_target_counts:
+            per_target_counts[method_name].sort(key=lambda x: x[0])
         # 汇总结果：每种方法下“至少匹配过任一 target”的 synthetic 条数
         results_aggregated = {}
         for method_name in union_matched:
@@ -188,7 +250,6 @@ def main():
             mask_agg[list(idx_set)] = True
             results_aggregated[method_name] = (mask_agg, synthetic.loc[mask_agg].reset_index(drop=True))
         results = results_aggregated
-        print("Target 来源: {}（共 {} 行，已全部遍历）".format(target_source_name, len(target_indices)))
         print()
     else:
         target_idx = target_indices[0]
