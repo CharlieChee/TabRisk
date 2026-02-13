@@ -17,6 +17,9 @@
 
   # 调节精度
   python scripts/match_target_demo.py --run-dir outputs/xxx --epsilon 0.01 --l2-radius 0.3 --fraction 0.85
+
+  # 从 run 目录下指定文件抽取 target（仅写文件名即可，如 original.csv）
+  python scripts/match_target_demo.py --run-dir outputs/xxx --target-file original.csv --target-row 0
 """
 
 from __future__ import annotations
@@ -40,7 +43,8 @@ MAX_SAMPLE_ROWS = 5
 
 
 def _load_data(args: argparse.Namespace):
-    """根据 run_dir 或显式路径加载 synthetic、candidate、schema。"""
+    """根据 run_dir 或显式路径加载 synthetic、target 来源（candidate 或 --target-file）、schema。"""
+    run_dir = None
     if args.run_dir:
         run_dir = Path(args.run_dir)
         if not run_dir.is_absolute():
@@ -50,11 +54,11 @@ def _load_data(args: argparse.Namespace):
         schema_path = run_dir / "schema.json"
     else:
         synthetic_path = Path(args.synthetic)
-        candidate_path = Path(args.candidate)
+        candidate_path = Path(args.candidate) if args.candidate else None
         schema_path = Path(args.schema) if args.schema else None
         if not synthetic_path.is_absolute():
             synthetic_path = PROJECT_ROOT / synthetic_path
-        if not candidate_path.is_absolute():
+        if candidate_path and not candidate_path.is_absolute():
             candidate_path = PROJECT_ROOT / candidate_path
         if schema_path and not schema_path.is_absolute():
             schema_path = PROJECT_ROOT / schema_path
@@ -63,15 +67,31 @@ def _load_data(args: argparse.Namespace):
         raise FileNotFoundError(f"合成数据不存在: {synthetic_path}")
     synthetic = pd.read_csv(synthetic_path)
 
-    if not candidate_path.exists():
-        raise FileNotFoundError(f"候选数据不存在: {candidate_path}")
-    candidate = pd.read_csv(candidate_path)
+    # target 来源：--target-file 指定则从该文件取，否则从 candidate 取
+    if getattr(args, "target_file", None):
+        target_path = Path(args.target_file)
+        if run_dir is not None:
+            # 指定了 run-dir 时，target-file 视为 run 目录下的文件名（如 original.csv）
+            target_path = run_dir / target_path
+        elif not target_path.is_absolute():
+            target_path = PROJECT_ROOT / target_path
+        if not target_path.exists():
+            raise FileNotFoundError(f"Target 文件不存在: {target_path}")
+        target_source = pd.read_csv(target_path)
+        target_source_name = str(target_path)
+    else:
+        if not candidate_path or not candidate_path.exists():
+            raise FileNotFoundError(
+                "未指定 --target-file 且 candidate 不存在或未指定（使用 --synthetic 时需 --candidate 或 --target-file）"
+            )
+        target_source = pd.read_csv(candidate_path)
+        target_source_name = str(candidate_path)
 
     schema = None
     if schema_path and schema_path.exists():
         schema = Schema.load(str(schema_path))
 
-    return synthetic, candidate, schema
+    return synthetic, target_source, target_source_name, schema
 
 
 def _feature_df(df: pd.DataFrame) -> pd.DataFrame:
@@ -91,7 +111,8 @@ def main():
     g.add_argument("--synthetic", type=str, help="synthetic.csv 路径（需同时指定 --candidate）")
     parser.add_argument("--candidate", type=str, help="candidate.csv 路径（与 --synthetic 一起使用）")
     parser.add_argument("--schema", type=str, default=None, help="schema.json 路径（可选，不指定则从数据推断）")
-    parser.add_argument("--target-row", type=int, default=0, help="从 candidate 中取第几行作为 target（0-based）")
+    parser.add_argument("--target-row", type=int, default=0, help="从 candidate 或 --target-file 中取第几行作为 target（0-based）")
+    parser.add_argument("--target-file", type=str, default=None, help="从该 CSV 抽取 target；与 --run-dir 同用时只需写 run 目录下文件名，如 original.csv")
     parser.add_argument("--epsilon", type=float, default=1e-6, help="连续列绝对容差（方法一、三）")
     parser.add_argument("--rel-epsilon", type=float, default=None, help="连续列相对容差（方法一，可选）")
     parser.add_argument("--l2-radius", type=float, default=0.5, help="L2 球半径（方法二，归一化后）")
@@ -101,16 +122,16 @@ def main():
     parser.add_argument("--output-dir", type=str, default=None, help="将每种方法的 target + 匹配样本写入该目录")
     args = parser.parse_args()
 
-    if args.synthetic and not args.candidate:
-        parser.error("使用 --synthetic 时必须指定 --candidate")
+    if args.synthetic and not args.candidate and not args.target_file:
+        parser.error("使用 --synthetic 时需指定 --candidate 或 --target-file 之一作为 target 来源")
 
-    synthetic, candidate, schema = _load_data(args)
+    synthetic, target_source, target_source_name, schema = _load_data(args)
     target_idx = args.target_row
-    if target_idx < 0 or target_idx >= len(candidate):
-        print(f"错误: target-row={target_idx} 超出 candidate 行范围 [0, {len(candidate)-1}]")
+    if target_idx < 0 or target_idx >= len(target_source):
+        print(f"错误: target-row={target_idx} 超出 target 来源行范围 [0, {len(target_source)-1}]")
         sys.exit(1)
 
-    target_row = candidate.iloc[target_idx : target_idx + 1]
+    target_row = target_source.iloc[target_idx : target_idx + 1]
     target_display = _feature_df(target_row)
 
     print("=" * 60)
@@ -122,7 +143,7 @@ def main():
     print(f"  fraction:       {args.fraction}")
     print(f"  n_bins:         {args.n_bins}")
     print()
-    print("Target 行（来自 candidate 第 {} 行）:".format(target_idx))
+    print("Target 行（来自 {} 第 {} 行）:".format(target_source_name, target_idx))
     print(target_display.to_string(index=False))
     print()
 
