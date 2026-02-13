@@ -223,32 +223,84 @@ def _run_sweep(args, synthetic, target_source, target_source_name, schema):
     print("=" * 60)
 
     tasks = []
-    for param_name in ["epsilon", "l2_radius", "fraction", "n_bins"]:
-        defaults = dict(SWEEP_DEFAULT)
-        for param_value in SWEEP_GRID[param_name]:
-            defaults[param_name] = param_value
-            eps, l2, frac, nb = defaults["epsilon"], defaults["l2_radius"], defaults["fraction"], defaults["n_bins"]
-            tasks.append(
-                (
-                    param_name,
-                    param_value,
-                    eps,
-                    l2,
-                    frac,
-                    nb,
-                    synthetic,
-                    target_chunk,
-                    target_indices,
-                    schema,
-                    getattr(args, "rel_epsilon", None),
+    if getattr(args, "sweep_full_grid", False):
+        # 全网格：5*5*6*5 = 750 组
+        for eps in SWEEP_GRID["epsilon"]:
+            for l2 in SWEEP_GRID["l2_radius"]:
+                for frac in SWEEP_GRID["fraction"]:
+                    for nb in SWEEP_GRID["n_bins"]:
+                        tasks.append(
+                            (
+                                "grid",
+                                None,
+                                eps,
+                                l2,
+                                frac,
+                                nb,
+                                synthetic,
+                                target_chunk,
+                                target_indices,
+                                schema,
+                                getattr(args, "rel_epsilon", None),
+                            )
+                        )
+        print("  全网格: {} 组（epsilon×l2_radius×fraction×n_bins）".format(len(tasks)))
+    elif getattr(args, "sweep_fraction_epsilon", False):
+        # 仅 fraction × epsilon 二维网格（精调唯一有匹配的维度）
+        l2, nb = SWEEP_DEFAULT["l2_radius"], SWEEP_DEFAULT["n_bins"]
+        for frac in SWEEP_GRID["fraction"]:
+            for eps in SWEEP_GRID["epsilon"]:
+                tasks.append(
+                    (
+                        "fraction_epsilon",
+                        None,
+                        eps,
+                        l2,
+                        frac,
+                        nb,
+                        synthetic,
+                        target_chunk,
+                        target_indices,
+                        schema,
+                        getattr(args, "rel_epsilon", None),
+                    )
                 )
-            )
+        print("  fraction×epsilon 网格: {} 组（精调 fraction_match）".format(len(tasks)))
+    else:
+        # 单参数扫描：5+5+6+5 = 21 组
+        for param_name in ["epsilon", "l2_radius", "fraction", "n_bins"]:
+            defaults = dict(SWEEP_DEFAULT)
+            for param_value in SWEEP_GRID[param_name]:
+                defaults[param_name] = param_value
+                eps, l2, frac, nb = defaults["epsilon"], defaults["l2_radius"], defaults["fraction"], defaults["n_bins"]
+                tasks.append(
+                    (
+                        param_name,
+                        param_value,
+                        eps,
+                        l2,
+                        frac,
+                        nb,
+                        synthetic,
+                        target_chunk,
+                        target_indices,
+                        schema,
+                        getattr(args, "rel_epsilon", None),
+                    )
+                )
+    sys.stdout.flush()
+
     rows = []
     with Pool(processes=n_jobs) as pool:
         for row in pool.imap_unordered(_sweep_worker, tasks):
             rows.append(row)
-    # 按 param_name, param_value 顺序排好，便于阅读
-    rows.sort(key=lambda r: (["epsilon", "l2_radius", "fraction", "n_bins"].index(r["param_name"]), r["param_value"]))
+    # 排序：全网格 / fraction_epsilon 按 epsilon,fraction；单参数按 param_name, param_value
+    if getattr(args, "sweep_full_grid", False):
+        rows.sort(key=lambda r: (r["epsilon"], r["l2_radius"], r["fraction"], r["n_bins"]))
+    elif getattr(args, "sweep_fraction_epsilon", False):
+        rows.sort(key=lambda r: (r["fraction"], r["epsilon"]))
+    else:
+        rows.sort(key=lambda r: (["epsilon", "l2_radius", "fraction", "n_bins"].index(r["param_name"]), r["param_value"]))
     df = pd.DataFrame(rows)
 
     pd.set_option("display.width", 200)
@@ -283,6 +335,8 @@ def main():
     parser.add_argument("--output-dir", type=str, default=None, help="将每种方法的 target + 匹配样本写入该目录")
     parser.add_argument("--n-jobs", type=int, default=DEFAULT_N_JOBS, help="并行进程数：遍历整个 target 或 sweep 时均生效（默认 16）")
     parser.add_argument("--sweep", action="store_true", help="参数扫描：在多种 epsilon/l2_radius/fraction/n_bins 下跑匹配，输出各组合的匹配数（便于找合适参数）")
+    parser.add_argument("--sweep-full-grid", action="store_true", help="sweep 时使用全网格（所有参数组合相乘）；不指定则仅单参数扫描（相加）")
+    parser.add_argument("--sweep-fraction-epsilon", action="store_true", help="sweep 仅做 fraction×epsilon 二维网格（针对 fraction_match 有效时精调）")
     parser.add_argument("--sweep-sample", type=int, default=100, help="sweep 时仅用前 N 行 target 以加速（默认 100）")
     args = parser.parse_args()
 
