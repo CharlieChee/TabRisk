@@ -98,6 +98,50 @@ def _match_chunk_worker(
     return {m: (union[m], per_target[m]) for m in union}
 
 
+def _sweep_worker(task):
+    """Sweep 单组参数：对一批 target 做匹配，返回该参数下的各方法匹配数。供多进程调用。"""
+    (
+        param_name,
+        param_value,
+        epsilon,
+        l2_radius,
+        fraction,
+        n_bins,
+        synthetic,
+        target_chunk,
+        target_indices,
+        schema,
+        rel_epsilon,
+    ) = task
+    union = defaultdict(set)
+    for k in range(len(target_indices)):
+        target_row = target_chunk.iloc[k : k + 1]
+        results = run_all_methods(
+            synthetic,
+            target_row.iloc[0],
+            schema=schema,
+            epsilon=epsilon,
+            rel_epsilon=rel_epsilon,
+            l2_radius=l2_radius,
+            fraction=fraction,
+            n_bins=n_bins,
+        )
+        for method_name, (mask, _) in results.items():
+            union[method_name].update(set(np.where(mask)[0]))
+    return {
+        "param_name": param_name,
+        "param_value": param_value,
+        "epsilon": epsilon,
+        "l2_radius": l2_radius,
+        "fraction": fraction,
+        "n_bins": n_bins,
+        "count_epsilon": len(union["epsilon"]),
+        "count_l2_ball": len(union["l2_ball"]),
+        "count_fraction_match": len(union["fraction_match"]),
+        "count_binned_exact": len(union["binned_exact"]),
+    }
+
+
 def _load_data(args: argparse.Namespace):
     """根据 run_dir 或显式路径加载 synthetic、target 来源（candidate 或 --target-file）、schema。"""
     run_dir = None
@@ -169,46 +213,42 @@ SWEEP_GRID = {
 
 
 def _run_sweep(args, synthetic, target_source, target_source_name, schema):
-    """参数扫描：多组参数下跑匹配，输出各方法匹配数表格。"""
+    """参数扫描：多组参数下跑匹配（多进程并行），输出各方法匹配数表格。"""
     n_sample = min(args.sweep_sample, len(target_source))
     target_indices = list(range(n_sample))
+    target_chunk = target_source.iloc[target_indices].reset_index(drop=True)
+    n_jobs = max(1, args.n_jobs)
     print("=" * 60)
-    print("参数 Sweep（target 前 {} 行）".format(n_sample))
+    print("参数 Sweep（target 前 {} 行，并行进程数 {}）".format(n_sample, n_jobs))
     print("=" * 60)
 
-    rows = []
+    tasks = []
     for param_name in ["epsilon", "l2_radius", "fraction", "n_bins"]:
         defaults = dict(SWEEP_DEFAULT)
         for param_value in SWEEP_GRID[param_name]:
             defaults[param_name] = param_value
             eps, l2, frac, nb = defaults["epsilon"], defaults["l2_radius"], defaults["fraction"], defaults["n_bins"]
-            union = defaultdict(set)
-            for target_idx in target_indices:
-                target_row = target_source.iloc[target_idx : target_idx + 1]
-                results = run_all_methods(
+            tasks.append(
+                (
+                    param_name,
+                    param_value,
+                    eps,
+                    l2,
+                    frac,
+                    nb,
                     synthetic,
-                    target_row.iloc[0],
-                    schema=schema,
-                    epsilon=eps,
-                    rel_epsilon=args.rel_epsilon,
-                    l2_radius=l2,
-                    fraction=frac,
-                    n_bins=nb,
+                    target_chunk,
+                    target_indices,
+                    schema,
+                    getattr(args, "rel_epsilon", None),
                 )
-                for method_name, (mask, _) in results.items():
-                    union[method_name].update(set(np.where(mask)[0]))
-            rows.append({
-                "param_name": param_name,
-                "param_value": param_value,
-                "epsilon": eps,
-                "l2_radius": l2,
-                "fraction": frac,
-                "n_bins": nb,
-                "count_epsilon": len(union["epsilon"]),
-                "count_l2_ball": len(union["l2_ball"]),
-                "count_fraction_match": len(union["fraction_match"]),
-                "count_binned_exact": len(union["binned_exact"]),
-            })
+            )
+    rows = []
+    with Pool(processes=n_jobs) as pool:
+        for row in pool.imap_unordered(_sweep_worker, tasks):
+            rows.append(row)
+    # 按 param_name, param_value 顺序排好，便于阅读
+    rows.sort(key=lambda r: (["epsilon", "l2_radius", "fraction", "n_bins"].index(r["param_name"]), r["param_value"]))
     df = pd.DataFrame(rows)
 
     pd.set_option("display.width", 200)
@@ -241,7 +281,7 @@ def main():
     parser.add_argument("--n-bins", type=int, default=10, help="连续列分箱数（方法四）")
     parser.add_argument("--max-sample-rows", type=int, default=MAX_SAMPLE_ROWS, help="每种方法最多展示的 synthetic 行数")
     parser.add_argument("--output-dir", type=str, default=None, help="将每种方法的 target + 匹配样本写入该目录")
-    parser.add_argument("--n-jobs", type=int, default=DEFAULT_N_JOBS, help="遍历整个 target 文件时的并行进程数（默认 16）")
+    parser.add_argument("--n-jobs", type=int, default=DEFAULT_N_JOBS, help="并行进程数：遍历整个 target 或 sweep 时均生效（默认 16）")
     parser.add_argument("--sweep", action="store_true", help="参数扫描：在多种 epsilon/l2_radius/fraction/n_bins 下跑匹配，输出各组合的匹配数（便于找合适参数）")
     parser.add_argument("--sweep-sample", type=int, default=100, help="sweep 时仅用前 N 行 target 以加速（默认 100）")
     args = parser.parse_args()
