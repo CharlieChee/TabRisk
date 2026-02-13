@@ -20,6 +20,9 @@
 
   # 从 run 目录下指定文件抽取 target（仅写文件名即可，如 original.csv）
   python scripts/match_target_demo.py --run-dir outputs/xxx --target-file original.csv --target-row 0
+
+  # 不指定 --target-row 时，遍历 target 文件每一行并汇总（各方法为“至少匹配任一 target”的 synthetic 条数）
+  python scripts/match_target_demo.py --run-dir outputs/xxx --target-file original.csv
 """
 
 from __future__ import annotations
@@ -33,6 +36,7 @@ PROJECT_ROOT = Path(__file__).resolve().parents[1]
 if str(PROJECT_ROOT / "src") not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT / "src"))
 
+import numpy as np
 import pandas as pd
 
 from synthgen.data.schema import Schema
@@ -111,7 +115,7 @@ def main():
     g.add_argument("--synthetic", type=str, help="synthetic.csv 路径（需同时指定 --candidate）")
     parser.add_argument("--candidate", type=str, help="candidate.csv 路径（与 --synthetic 一起使用）")
     parser.add_argument("--schema", type=str, default=None, help="schema.json 路径（可选，不指定则从数据推断）")
-    parser.add_argument("--target-row", type=int, default=0, help="从 candidate 或 --target-file 中取第几行作为 target（0-based）")
+    parser.add_argument("--target-row", type=int, default=None, help="取第几行作为 target（0-based）；与 --target-file 同用且不指定时则遍历整个 CSV 并汇总结果")
     parser.add_argument("--target-file", type=str, default=None, help="从该 CSV 抽取 target；与 --run-dir 同用时只需写 run 目录下文件名，如 original.csv")
     parser.add_argument("--epsilon", type=float, default=1e-6, help="连续列绝对容差（方法一、三）")
     parser.add_argument("--rel-epsilon", type=float, default=None, help="连续列相对容差（方法一，可选）")
@@ -126,13 +130,17 @@ def main():
         parser.error("使用 --synthetic 时需指定 --candidate 或 --target-file 之一作为 target 来源")
 
     synthetic, target_source, target_source_name, schema = _load_data(args)
-    target_idx = args.target_row
-    if target_idx < 0 or target_idx >= len(target_source):
-        print(f"错误: target-row={target_idx} 超出 target 来源行范围 [0, {len(target_source)-1}]")
-        sys.exit(1)
 
-    target_row = target_source.iloc[target_idx : target_idx + 1]
-    target_display = _feature_df(target_row)
+    # 与 --target-file 同用且未指定 --target-row 时，遍历整个 CSV 并汇总
+    use_all_rows = args.target_file and args.target_row is None
+    if use_all_rows:
+        target_indices = list(range(len(target_source)))
+    else:
+        target_idx = args.target_row if args.target_row is not None else 0
+        if target_idx < 0 or target_idx >= len(target_source):
+            print(f"错误: target-row={target_idx} 超出 target 来源行范围 [0, {len(target_source)-1}]")
+            sys.exit(1)
+        target_indices = [target_idx]
 
     print("=" * 60)
     print("匹配条件（精度）")
@@ -143,20 +151,6 @@ def main():
     print(f"  fraction:       {args.fraction}")
     print(f"  n_bins:         {args.n_bins}")
     print()
-    print("Target 行（来自 {} 第 {} 行）:".format(target_source_name, target_idx))
-    print(target_display.to_string(index=False))
-    print()
-
-    results = run_all_methods(
-        synthetic,
-        target_row.iloc[0],
-        schema=schema,
-        epsilon=args.epsilon,
-        rel_epsilon=args.rel_epsilon,
-        l2_radius=args.l2_radius,
-        fraction=args.fraction,
-        n_bins=args.n_bins,
-    )
 
     method_descriptions = {
         "epsilon": "方法一：分类型精确 + 连续型在 epsilon 内",
@@ -165,11 +159,62 @@ def main():
         "binned_exact": "方法四：连续列分箱后整行精确匹配",
     }
 
+    if use_all_rows:
+        # 遍历每一行作为 target，各方法取匹配索引的并集，并记录每行匹配数
+        from collections import defaultdict
+        union_matched = defaultdict(set)  # method_name -> set(synthetic indices)
+        per_target_counts = defaultdict(list)  # method_name -> [(target_idx, count), ...]
+        for target_idx in target_indices:
+            target_row = target_source.iloc[target_idx : target_idx + 1]
+            results = run_all_methods(
+                synthetic,
+                target_row.iloc[0],
+                schema=schema,
+                epsilon=args.epsilon,
+                rel_epsilon=args.rel_epsilon,
+                l2_radius=args.l2_radius,
+                fraction=args.fraction,
+                n_bins=args.n_bins,
+            )
+            for method_name, (mask, matched_df) in results.items():
+                idx_set = set(np.where(mask)[0])
+                union_matched[method_name].update(idx_set)
+                per_target_counts[method_name].append((target_idx, len(idx_set)))
+        # 汇总结果：每种方法下“至少匹配过任一 target”的 synthetic 条数
+        results_aggregated = {}
+        for method_name in union_matched:
+            idx_set = union_matched[method_name]
+            mask_agg = np.zeros(len(synthetic), dtype=bool)
+            mask_agg[list(idx_set)] = True
+            results_aggregated[method_name] = (mask_agg, synthetic.loc[mask_agg].reset_index(drop=True))
+        results = results_aggregated
+        print("Target 来源: {}（共 {} 行，已全部遍历）".format(target_source_name, len(target_indices)))
+        print()
+    else:
+        target_idx = target_indices[0]
+        target_row = target_source.iloc[target_idx : target_idx + 1]
+        target_display = _feature_df(target_row)
+        print("Target 行（来自 {} 第 {} 行）:".format(target_source_name, target_idx))
+        print(target_display.to_string(index=False))
+        print()
+        results = run_all_methods(
+            synthetic,
+            target_row.iloc[0],
+            schema=schema,
+            epsilon=args.epsilon,
+            rel_epsilon=args.rel_epsilon,
+            l2_radius=args.l2_radius,
+            fraction=args.fraction,
+            n_bins=args.n_bins,
+        )
+
     output_dir = None
     if args.output_dir:
         output_dir = Path(args.output_dir)
         output_dir.mkdir(parents=True, exist_ok=True)
-        target_display.to_csv(output_dir / "target.csv", index=False)
+        if not use_all_rows:
+            target_display = _feature_df(target_source.iloc[target_indices[0] : target_indices[0] + 1])
+            target_display.to_csv(output_dir / "target.csv", index=False)
 
     for method_name, (mask, matched_df) in results.items():
         count = int(mask.sum())
@@ -177,7 +222,13 @@ def main():
         print("=" * 60)
         print(f"{method_name}: {desc}")
         print("=" * 60)
-        print(f"  匹配条数: {count} / {len(synthetic)}")
+        if use_all_rows:
+            print(f"  匹配条数（至少匹配过任一 target）: {count} / {len(synthetic)}")
+            if per_target_counts:
+                total_matches = sum(c for _, c in per_target_counts[method_name])
+                print(f"  各 target 行匹配数之和: {total_matches}")
+        else:
+            print(f"  匹配条数: {count} / {len(synthetic)}")
         sample = _feature_df(matched_df.head(args.max_sample_rows))
         if len(sample) > 0:
             print("  匹配到的 synthetic 样本（前 {} 条）:".format(len(sample)))
@@ -190,11 +241,20 @@ def main():
             out_path = output_dir / f"matched_{method_name}.csv"
             _feature_df(matched_df).to_csv(out_path, index=False)
             print(f"  已写入: {out_path}")
+        if use_all_rows and output_dir is not None and per_target_counts:
+            per_path = output_dir / f"per_target_count_{method_name}.csv"
+            pd.DataFrame(per_target_counts[method_name], columns=["target_row", "match_count"]).to_csv(
+                per_path, index=False
+            )
+            print(f"  每行 target 匹配数已写入: {per_path}")
 
     if output_dir:
         print()
-        print(f"Target 已写入: {output_dir / 'target.csv'}")
+        if not use_all_rows:
+            print(f"Target 已写入: {output_dir / 'target.csv'}")
         print(f"各方法匹配结果已写入: {output_dir / 'matched_<method>.csv'}")
+        if use_all_rows:
+            print("各方法 per_target_count_<method>.csv 为每行 target 的匹配条数。")
 
 
 if __name__ == "__main__":
