@@ -36,19 +36,32 @@ def _feature_columns(df: pd.DataFrame, schema: Optional[Schema] = None) -> Tuple
     return cols, cat, cont
 
 
+def _norm_str(s: object) -> str:
+    """分类型比较用：去空格、统一 nan、数值形字符串规整（如 6.0 与 6 视为相同）。"""
+    if pd.isna(s) or s is None:
+        return "nan"
+    s = str(s).strip()
+    if not s:
+        return "nan"
+    try:
+        f = float(s)
+        return str(int(f)) if f == int(f) else str(f)
+    except (ValueError, TypeError):
+        return s
+
+
 def _align_and_dtype(synthetic: pd.DataFrame, target: pd.Series, cols: List[str]) -> Tuple[pd.DataFrame, pd.Series]:
-    """取共有的 cols，并统一 dtypes（便于比较）。target 可为 DataFrame 的一行（Series），此时 t[c] 为标量。"""
+    """取共有的 cols，并统一 dtypes（便于比较）。分类型会 strip，减少 CSV 空格导致的不匹配。"""
     common = [c for c in cols if c in synthetic.columns and c in target.index]
     S = synthetic[common].copy()
     t = target[common].copy()
     for c in common:
-        # target 为 Series 时 t[c] 是标量，无 .dtype；只按 S[c] 的 dtype 决定是否转成数值
         if pd.api.types.is_numeric_dtype(S[c]):
             S[c] = pd.to_numeric(S[c], errors="coerce")
             t[c] = pd.to_numeric(t[c], errors="coerce")
         else:
-            S[c] = S[c].astype(str)
-            t[c] = str(t[c]) if pd.notna(t[c]) else "nan"
+            S[c] = S[c].apply(_norm_str)
+            t[c] = _norm_str(t[c])
     return S, t
 
 
@@ -72,9 +85,8 @@ def method_epsilon(
     for c in categorical_columns:
         if c not in S.columns:
             continue
-        # 统一成字符串比较，NaN 视为不等
-        s_vals = S[c].astype(str).values
-        t_val = str(t[c]) if pd.notna(t[c]) else "nan"
+        s_vals = S[c].values
+        t_val = t[c]
         mask &= (s_vals == t_val)
 
     for c in continuous_columns:
@@ -112,8 +124,8 @@ def method_l2_ball(
     for c in categorical_columns:
         if c not in S.columns:
             continue
-        s_vals = S[c].astype(str).values
-        t_val = str(t[c]) if pd.notna(t[c]) else "nan"
+        s_vals = S[c].values
+        t_val = t[c]
         mask &= (s_vals == t_val)
 
     if not continuous_columns:
@@ -165,8 +177,8 @@ def method_fraction_match(
     for c in categorical_columns:
         if c not in S.columns:
             continue
-        s_vals = S[c].astype(str).values
-        t_val = str(t[c]) if pd.notna(t[c]) else "nan"
+        s_vals = S[c].values
+        t_val = t[c]
         match_count += (s_vals == t_val).astype(int)
 
     for c in continuous_columns:
@@ -227,8 +239,8 @@ def method_binned_exact(
     for c in cols:
         if c not in S_bin.columns:
             continue
-        s_vals = S_bin[c].astype(str).values
-        t_val = str(t_bin[c]) if pd.notna(t_bin[c]) else "nan"
+        s_vals = S_bin[c].apply(_norm_str).values
+        t_val = _norm_str(t_bin[c])
         mask &= (s_vals == t_val)
     return mask
 

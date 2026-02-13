@@ -23,7 +23,9 @@
 
   # 不指定 --target-row 时，遍历 target 文件每一行并汇总（多进程并行，默认 16 进程）
   python scripts/match_target_demo.py --run-dir outputs/xxx --target-file original.csv
-  python scripts/match_target_demo.py --run-dir outputs/xxx --target-file original.csv --n-jobs 32
+  # 参数扫描，找合适容差（仅用前 100 行 target 加速）
+  python scripts/match_target_demo.py --run-dir outputs/xxx --target-file original.csv --sweep
+  python scripts/match_target_demo.py --run-dir outputs/xxx --target-file original.csv --sweep --sweep-sample 200 --output-dir outputs/xxx
 """
 
 from __future__ import annotations
@@ -156,6 +158,71 @@ def _feature_df(df: pd.DataFrame) -> pd.DataFrame:
     return df
 
 
+# 默认宽松参数（sweep 时作为未扫描维度的取值）
+SWEEP_DEFAULT = {"epsilon": 0.01, "l2_radius": 1.0, "fraction": 0.8, "n_bins": 10}
+SWEEP_GRID = {
+    "epsilon": [1e-6, 1e-4, 0.01, 0.1, 1.0],
+    "l2_radius": [0.2, 0.5, 1.0, 2.0, 5.0],
+    "fraction": [0.5, 0.6, 0.7, 0.8, 0.9, 1.0],
+    "n_bins": [3, 5, 10, 20, 50],
+}
+
+
+def _run_sweep(args, synthetic, target_source, target_source_name, schema):
+    """参数扫描：多组参数下跑匹配，输出各方法匹配数表格。"""
+    n_sample = min(args.sweep_sample, len(target_source))
+    target_indices = list(range(n_sample))
+    print("=" * 60)
+    print("参数 Sweep（target 前 {} 行）".format(n_sample))
+    print("=" * 60)
+
+    rows = []
+    for param_name in ["epsilon", "l2_radius", "fraction", "n_bins"]:
+        defaults = dict(SWEEP_DEFAULT)
+        for param_value in SWEEP_GRID[param_name]:
+            defaults[param_name] = param_value
+            eps, l2, frac, nb = defaults["epsilon"], defaults["l2_radius"], defaults["fraction"], defaults["n_bins"]
+            union = defaultdict(set)
+            for target_idx in target_indices:
+                target_row = target_source.iloc[target_idx : target_idx + 1]
+                results = run_all_methods(
+                    synthetic,
+                    target_row.iloc[0],
+                    schema=schema,
+                    epsilon=eps,
+                    rel_epsilon=args.rel_epsilon,
+                    l2_radius=l2,
+                    fraction=frac,
+                    n_bins=nb,
+                )
+                for method_name, (mask, _) in results.items():
+                    union[method_name].update(set(np.where(mask)[0]))
+            rows.append({
+                "param_name": param_name,
+                "param_value": param_value,
+                "epsilon": eps,
+                "l2_radius": l2,
+                "fraction": frac,
+                "n_bins": nb,
+                "count_epsilon": len(union["epsilon"]),
+                "count_l2_ball": len(union["l2_ball"]),
+                "count_fraction_match": len(union["fraction_match"]),
+                "count_binned_exact": len(union["binned_exact"]),
+            })
+    df = pd.DataFrame(rows)
+
+    pd.set_option("display.width", 200)
+    pd.set_option("display.max_columns", None)
+    print(df.to_string(index=False))
+    print()
+
+    out_path = Path(args.output_dir) / "sweep_results.csv" if args.output_dir else PROJECT_ROOT / "sweep_results.csv"
+    if args.output_dir:
+        Path(args.output_dir).mkdir(parents=True, exist_ok=True)
+    df.to_csv(out_path, index=False)
+    print("Sweep 结果已写入: {}".format(out_path))
+
+
 def main():
     parser = argparse.ArgumentParser(
         description="在 synthetic 中统计与 target（来自 candidate 的一行）近似相等的条数，多种方法对比。"
@@ -167,20 +234,26 @@ def main():
     parser.add_argument("--schema", type=str, default=None, help="schema.json 路径（可选，不指定则从数据推断）")
     parser.add_argument("--target-row", type=int, default=None, help="取第几行作为 target（0-based）；与 --target-file 同用且不指定时则遍历整个 CSV 并汇总结果")
     parser.add_argument("--target-file", type=str, default=None, help="从该 CSV 抽取 target；与 --run-dir 同用时只需写 run 目录下文件名，如 original.csv")
-    parser.add_argument("--epsilon", type=float, default=1e-6, help="连续列绝对容差（方法一、三）")
+    parser.add_argument("--epsilon", type=float, default=0.01, help="连续列绝对容差（方法一、三），默认 0.01 较宽松")
     parser.add_argument("--rel-epsilon", type=float, default=None, help="连续列相对容差（方法一，可选）")
-    parser.add_argument("--l2-radius", type=float, default=0.5, help="L2 球半径（方法二，归一化后）")
-    parser.add_argument("--fraction", type=float, default=0.9, help="最少匹配列比例（方法三）")
+    parser.add_argument("--l2-radius", type=float, default=1.0, help="L2 球半径（方法二，归一化后），默认 1.0 较宽松")
+    parser.add_argument("--fraction", type=float, default=0.8, help="最少匹配列比例（方法三），默认 0.8")
     parser.add_argument("--n-bins", type=int, default=10, help="连续列分箱数（方法四）")
     parser.add_argument("--max-sample-rows", type=int, default=MAX_SAMPLE_ROWS, help="每种方法最多展示的 synthetic 行数")
     parser.add_argument("--output-dir", type=str, default=None, help="将每种方法的 target + 匹配样本写入该目录")
     parser.add_argument("--n-jobs", type=int, default=DEFAULT_N_JOBS, help="遍历整个 target 文件时的并行进程数（默认 16）")
+    parser.add_argument("--sweep", action="store_true", help="参数扫描：在多种 epsilon/l2_radius/fraction/n_bins 下跑匹配，输出各组合的匹配数（便于找合适参数）")
+    parser.add_argument("--sweep-sample", type=int, default=100, help="sweep 时仅用前 N 行 target 以加速（默认 100）")
     args = parser.parse_args()
 
     if args.synthetic and not args.candidate and not args.target_file:
         parser.error("使用 --synthetic 时需指定 --candidate 或 --target-file 之一作为 target 来源")
 
     synthetic, target_source, target_source_name, schema = _load_data(args)
+
+    if args.sweep:
+        _run_sweep(args, synthetic, target_source, target_source_name, schema)
+        return
 
     # 与 --target-file 同用且未指定 --target-row 时，遍历整个 CSV 并汇总
     use_all_rows = args.target_file and args.target_row is None
