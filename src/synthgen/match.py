@@ -37,18 +37,18 @@ def _feature_columns(df: pd.DataFrame, schema: Optional[Schema] = None) -> Tuple
 
 
 def _align_and_dtype(synthetic: pd.DataFrame, target: pd.Series, cols: List[str]) -> Tuple[pd.DataFrame, pd.Series]:
-    """取共有的 cols，并统一 dtypes（便于比较）。"""
+    """取共有的 cols，并统一 dtypes（便于比较）。target 可为 DataFrame 的一行（Series），此时 t[c] 为标量。"""
     common = [c for c in cols if c in synthetic.columns and c in target.index]
     S = synthetic[common].copy()
     t = target[common].copy()
     for c in common:
-        if S[c].dtype != t[c].dtype:
-            if pd.api.types.is_numeric_dtype(S[c]) and pd.api.types.is_numeric_dtype(t[c]):
-                S[c] = pd.to_numeric(S[c], errors="coerce")
-                t[c] = pd.to_numeric(t[c], errors="coerce")
-            else:
-                S[c] = S[c].astype(str)
-                t[c] = str(t[c])
+        # target 为 Series 时 t[c] 是标量，无 .dtype；只按 S[c] 的 dtype 决定是否转成数值
+        if pd.api.types.is_numeric_dtype(S[c]):
+            S[c] = pd.to_numeric(S[c], errors="coerce")
+            t[c] = pd.to_numeric(t[c], errors="coerce")
+        else:
+            S[c] = S[c].astype(str)
+            t[c] = str(t[c]) if pd.notna(t[c]) else "nan"
     return S, t
 
 
