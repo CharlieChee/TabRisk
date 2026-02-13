@@ -377,6 +377,7 @@ def main():
         "binned_exact": "方法四：连续列分箱后整行精确匹配",
     }
 
+    per_target_df = None  # 以 target 为视角的表格（仅 use_all_rows 时填充）
     if use_all_rows:
         # 多进程遍历：每行作为 target，各方法取匹配索引的并集，并记录每行匹配数
         n_jobs = max(1, args.n_jobs)
@@ -409,7 +410,22 @@ def main():
         # 按 target_row 排序，保证与顺序一致
         for method_name in per_target_counts:
             per_target_counts[method_name].sort(key=lambda x: x[0])
-        # 汇总结果：每种方法下“至少匹配过任一 target”的 synthetic 条数
+        # 以 target 为视角：每个 target 对应匹配了多少条 synthetic
+        by_target = {}
+        for method_name in per_target_counts:
+            for (tid, c) in per_target_counts[method_name]:
+                by_target.setdefault(tid, {}).update({method_name: c})
+        per_target_table = []
+        for tid in sorted(by_target.keys()):
+            row = {"target_row": tid}
+            for m in ["epsilon", "l2_ball", "fraction_match", "binned_exact"]:
+                row["count_" + m] = by_target[tid].get(m, 0)
+            per_target_table.append(row)
+        per_target_df = pd.DataFrame(per_target_table)
+        print("以 target 为视角：每个 target 匹配了多少条 synthetic")
+        print(per_target_df.to_string(index=False))
+        print()
+        # 汇总结果：每种方法下“至少匹配过任一 target”的 synthetic 条数（供参考）
         results_aggregated = {}
         for method_name in union_matched:
             idx_set = union_matched[method_name]
@@ -417,7 +433,6 @@ def main():
             mask_agg[list(idx_set)] = True
             results_aggregated[method_name] = (mask_agg, synthetic.loc[mask_agg].reset_index(drop=True))
         results = results_aggregated
-        print()
     else:
         target_idx = target_indices[0]
         target_row = target_source.iloc[target_idx : target_idx + 1]
@@ -478,11 +493,15 @@ def main():
 
     if output_dir:
         print()
+        if per_target_df is not None:
+            out_csv = output_dir / "per_target_synthetic_counts.csv"
+            per_target_df.to_csv(out_csv, index=False)
+            print("以 target 为视角（每个 target 匹配了多少条 synthetic）已写入: {}".format(out_csv))
         if not use_all_rows:
             print(f"Target 已写入: {output_dir / 'target.csv'}")
         print(f"各方法匹配结果已写入: {output_dir / 'matched_<method>.csv'}")
         if use_all_rows:
-            print("各方法 per_target_count_<method>.csv 为每行 target 的匹配条数。")
+            print("各方法 per_target_count_<method>.csv 为每行 target 的匹配条数（与上表一致，按方法拆分）。")
 
 
 if __name__ == "__main__":
