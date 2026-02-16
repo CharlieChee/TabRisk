@@ -315,6 +315,111 @@ def _run_sweep(args, synthetic, target_source, target_source_name, schema):
     print("Sweep 结果已写入: {}".format(out_path))
 
 
+MEMBER_COL = "is_member"
+
+
+def _run_tune_memorization(args, synthetic, target_source, target_source_name, schema):
+    """
+    记忆化调参：在 (fraction, epsilon) 网格上跑匹配，用 is_member 标签选参。
+    目标：选出一组参数使 member 的匹配数明显高于 non-member（便于做成员推断/记忆化论文）。
+    """
+    if MEMBER_COL not in target_source.columns:
+        print("错误: --tune-memorization 需要 target 文件含 is_member 列（如用 --target-file candidate.csv）")
+        sys.exit(1)
+
+    n_sample = len(target_source)
+    target_indices = list(range(n_sample))
+    n_jobs = max(1, args.n_jobs)
+
+    l2, nb = SWEEP_DEFAULT["l2_radius"], SWEEP_DEFAULT["n_bins"]
+    print("=" * 60)
+    print("记忆化调参（target 含 is_member，选 fraction/epsilon 使 member 匹配数 > non-member）")
+    print("  Target: {}（共 {} 行），并行进程数 {}".format(target_source_name, n_sample, n_jobs))
+    print("=" * 60)
+
+    try:
+        from sklearn.metrics import roc_auc_score
+    except ImportError:
+        roc_auc_score = None
+
+    rows = []
+    for frac in SWEEP_GRID["fraction"]:
+        for eps in SWEEP_GRID["epsilon"]:
+            chunks = []
+            chunk_size = max(1, (len(target_indices) + n_jobs - 1) // n_jobs)
+            for i in range(0, len(target_indices), chunk_size):
+                idx_chunk = target_indices[i : i + chunk_size]
+                tchunk = target_source.iloc[idx_chunk].reset_index(drop=True)
+                chunks.append(
+                    (
+                        idx_chunk,
+                        synthetic,
+                        tchunk,
+                        schema,
+                        eps,
+                        getattr(args, "rel_epsilon", None),
+                        l2,
+                        frac,
+                        nb,
+                    )
+                )
+            per_target_counts = defaultdict(list)
+            with Pool(processes=n_jobs) as pool:
+                for part in pool.imap_unordered(_match_chunk_worker, chunks):
+                    for method_name, (_, counts) in part.items():
+                        per_target_counts[method_name].extend(counts)
+            for m in per_target_counts:
+                per_target_counts[m].sort(key=lambda x: x[0])
+            # fraction_match 的 (target_idx, count)
+            counts_by_tid = dict(per_target_counts.get("fraction_match", []))
+            y_true = target_source[MEMBER_COL].astype(int).values
+            y_score = np.array([counts_by_tid.get(tid, 0) for tid in target_indices])
+            member_mask = y_true == 1
+            non_member_mask = ~member_mask
+            n_mem, n_non = member_mask.sum(), non_member_mask.sum()
+            mean_member = float(y_score[member_mask].mean()) if n_mem else 0.0
+            mean_non_member = float(y_score[non_member_mask].mean()) if n_non else 0.0
+            diff = mean_member - mean_non_member
+            if roc_auc_score is not None and n_mem > 0 and n_non > 0:
+                auc = float(roc_auc_score(y_true, y_score))
+            else:
+                auc = 0.5
+            rows.append(
+                {
+                    "fraction": frac,
+                    "epsilon": eps,
+                    "mean_member": round(mean_member, 2),
+                    "mean_non_member": round(mean_non_member, 2),
+                    "diff": round(diff, 2),
+                    "auc": round(auc, 4),
+                }
+            )
+
+    df = pd.DataFrame(rows)
+    df = df.sort_values(["fraction", "epsilon"]).reset_index(drop=True)
+    pd.set_option("display.width", 200)
+    pd.set_option("display.max_columns", None)
+    print(df.to_string(index=False))
+    print()
+
+    best = df.loc[df["diff"].idxmax()]
+    print("推荐参数（按 diff = mean_member - mean_non_member 最大）:")
+    print("  fraction = {}, epsilon = {}  ->  mean_member = {}, mean_non_member = {}, diff = {}, AUC = {}".format(
+        best["fraction"], best["epsilon"], best["mean_member"], best["mean_non_member"], best["diff"], best["auc"]
+    ))
+    if roc_auc_score and (df["auc"] > 0.5).any():
+        best_auc = df.loc[df["auc"].idxmax()]
+        print("  （按 AUC 最大: fraction = {}, epsilon = {}）".format(best_auc["fraction"], best_auc["epsilon"]))
+    print()
+
+    if args.output_dir:
+        out_dir = Path(args.output_dir)
+        out_dir.mkdir(parents=True, exist_ok=True)
+        out_path = out_dir / "tune_memorization_results.csv"
+        df.to_csv(out_path, index=False)
+        print("结果已写入: {}".format(out_path))
+
+
 def main():
     parser = argparse.ArgumentParser(
         description="在 synthetic 中统计与 target（来自 candidate 的一行）近似相等的条数，多种方法对比。"
@@ -338,6 +443,7 @@ def main():
     parser.add_argument("--sweep-full-grid", action="store_true", help="sweep 时使用全网格（所有参数组合相乘）；不指定则仅单参数扫描（相加）")
     parser.add_argument("--sweep-fraction-epsilon", action="store_true", help="sweep 仅做 fraction×epsilon 二维网格（针对 fraction_match 有效时精调）")
     parser.add_argument("--sweep-sample", type=int, default=100, help="sweep 时仅用前 N 行 target 以加速（默认 100）")
+    parser.add_argument("--tune-memorization", action="store_true", help="用 member/non-member 标签选参：使 member 匹配数 > non-member，需 target 含 is_member 列（如 candidate.csv）")
     args = parser.parse_args()
 
     if args.synthetic and not args.candidate and not args.target_file:
@@ -347,6 +453,10 @@ def main():
 
     if args.sweep:
         _run_sweep(args, synthetic, target_source, target_source_name, schema)
+        return
+
+    if getattr(args, "tune_memorization", False):
+        _run_tune_memorization(args, synthetic, target_source, target_source_name, schema)
         return
 
     # 与 --target-file 同用且未指定 --target-row 时，遍历整个 CSV 并汇总
