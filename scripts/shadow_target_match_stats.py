@@ -40,8 +40,11 @@ def _count_worker(task):
     return (path_str, c)
 
 
-def _get_target_row(run_dir: Path, target_idx: int, candidate_df: pd.DataFrame) -> pd.Series:
-    """从 run_dir 的 target_manifest 或 candidate 得到 target_idx 对应的 target 行（Series）。"""
+MEMBER_COL = "is_member"
+
+
+def _get_target_row(run_dir: Path, target_idx: int, candidate_df: pd.DataFrame):
+    """从 run_dir 的 target_manifest 或 candidate 得到 target_idx 对应的 target 行及 candidate 行号。返回 (target_row, candidate_row_idx)。"""
     manifest_path = run_dir / "shadow" / "target_manifest.csv"
     if manifest_path.exists():
         manifest = pd.read_csv(manifest_path)
@@ -53,7 +56,7 @@ def _get_target_row(run_dir: Path, target_idx: int, candidate_df: pd.DataFrame) 
         candidate_row_idx = target_idx
     if candidate_row_idx < 0 or candidate_row_idx >= len(candidate_df):
         raise ValueError(f"candidate_row_idx={candidate_row_idx} 超出 candidate 行范围")
-    return candidate_df.iloc[candidate_row_idx]
+    return candidate_df.iloc[candidate_row_idx], candidate_row_idx
 
 
 def main():
@@ -83,7 +86,11 @@ def main():
     candidate_df = pd.read_csv(candidate_path)
     schema = Schema.load(str(schema_path)) if schema_path.exists() else None
 
-    target_row = _get_target_row(run_dir, args.target_idx, candidate_df)
+    target_row, candidate_row_idx = _get_target_row(run_dir, args.target_idx, candidate_df)
+    is_member = None
+    if MEMBER_COL in candidate_df.columns:
+        is_member = int(candidate_df.iloc[candidate_row_idx][MEMBER_COL])
+
     target_dir = run_dir / "shadow" / "target_{}".format(args.target_idx)
     if not target_dir.exists():
         print("错误: shadow 目录不存在: {}".format(target_dir))
@@ -122,10 +129,30 @@ def main():
     mean_in = sum(in_counts) / len(in_counts) if in_counts else 0.0
     mean_out = sum(out_counts) / len(out_counts) if out_counts else 0.0
 
+    # 主 synthetic.csv（run_dir 下）与该 target 的匹配条数
+    main_synthetic_path = run_dir / "synthetic.csv"
+    main_synthetic_count = None
+    if main_synthetic_path.exists():
+        main_syn = pd.read_csv(main_synthetic_path)
+        res_main = run_all_methods(
+            main_syn,
+            target_row,
+            schema=schema,
+            epsilon=args.epsilon,
+            fraction=args.fraction,
+        )
+        main_synthetic_count = int(res_main["fraction_match"][0].sum())
+
+    member_label = "member (训练集)" if is_member == 1 else "non-member (非训练集)" if is_member == 0 else "未知"
+
     print("=" * 60)
     print("Shadow target_{} 匹配统计（fraction={}, epsilon={}, 并行进程数 {}）".format(
         args.target_idx, args.fraction, args.epsilon, n_jobs))
     print("=" * 60)
+    print("  target 身份: {} (candidate 行 {}，is_member={})".format(
+        member_label, candidate_row_idx, is_member if is_member is not None else "N/A"))
+    if main_synthetic_count is not None:
+        print("  主 synthetic.csv 匹配条数: {}".format(main_synthetic_count))
     print("  in  模型数: {},  匹配条数均值: {:.2f}".format(len(in_counts), mean_in))
     print("  out 模型数: {},  匹配条数均值: {:.2f}".format(len(out_counts), mean_out))
     print("  diff (in - out): {:.2f}".format(mean_in - mean_out))
@@ -142,6 +169,17 @@ def main():
             {"role": "out", "round": i, "match_count": out_counts[i]} for i in range(len(out_counts))
         ]).to_csv(out_path, index=False)
         print("明细已写入: {}".format(out_path))
+        summary_path = out_path.parent / (out_path.stem + "_summary.csv")
+        pd.DataFrame([{
+            "target_idx": args.target_idx,
+            "is_member": is_member,
+            "member_label": member_label,
+            "main_synthetic_match_count": main_synthetic_count,
+            "mean_in": round(mean_in, 2),
+            "mean_out": round(mean_out, 2),
+            "diff": round(mean_in - mean_out, 2),
+        }]).to_csv(summary_path, index=False)
+        print("汇总（含身份与主 synthetic 匹配数）已写入: {}".format(summary_path))
 
 
 if __name__ == "__main__":
