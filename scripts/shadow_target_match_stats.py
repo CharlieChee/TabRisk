@@ -236,6 +236,12 @@ def main():
     print("  in  模型数: {},  匹配条数均值: {:.2f}".format(row["n_in_models"], row["mean_in"]))
     print("  out 模型数: {},  匹配条数均值: {:.2f}".format(row["n_out_models"], row["mean_out"]))
     print("  diff (in - out): {:.2f}".format(row["diff"]))
+    # 建议阈值：取 in/out 均值中点，至少为 1；主 synthetic 匹配数 >= 该值判 member
+    suggested = max(1, round((row["mean_in"] + row["mean_out"]) / 2))
+    print("  建议判别阈值: 主 synthetic 匹配数 >= {} 时判为 member（基于本次 in/out 均值中点）".format(suggested))
+    if row["main_synthetic_match_count"] is not None:
+        pred = "member" if row["main_synthetic_match_count"] >= suggested else "non-member"
+        print("  本 target 按该阈值判定: {} (主 synthetic 匹配数={})".format(pred, row["main_synthetic_match_count"]))
     print()
 
     if args.output:
