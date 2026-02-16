@@ -12,6 +12,7 @@ from __future__ import annotations
 import argparse
 import re
 import sys
+from multiprocessing import Pool
 from pathlib import Path
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
@@ -22,6 +23,21 @@ import pandas as pd
 
 from synthgen.data.schema import Schema
 from synthgen.match import run_all_methods
+
+
+def _count_worker(task):
+    """单文件：读 synthetic，算与 target 的 fraction_match 条数。返回 (path_str, count)。"""
+    path_str, target_row, schema, epsilon, fraction = task
+    syn = pd.read_csv(path_str)
+    res = run_all_methods(
+        syn,
+        target_row,
+        schema=schema,
+        epsilon=epsilon,
+        fraction=fraction,
+    )
+    c = int(res["fraction_match"][0].sum())
+    return (path_str, c)
 
 
 def _get_target_row(run_dir: Path, target_idx: int, candidate_df: pd.DataFrame) -> pd.Series:
@@ -48,6 +64,7 @@ def main():
     parser.add_argument("--target-idx", type=int, default=0, help="target 编号，如 0 表示 target_0")
     parser.add_argument("--fraction", type=float, default=0.8, help="fraction_match 的 fraction")
     parser.add_argument("--epsilon", type=float, default=0.01, help="fraction_match 的 epsilon")
+    parser.add_argument("--n-jobs", type=int, default=64, help="并行进程数（默认 64）")
     parser.add_argument("--output", type=str, default=None, help="结果写入该 CSV（可选）")
     args = parser.parse_args()
 
@@ -89,36 +106,25 @@ def main():
         print("错误: target_{} 下未找到 synthetic_round_*_in.csv 或 _out.csv".format(args.target_idx))
         sys.exit(1)
 
-    in_counts = []
-    for p in in_files:
-        syn = pd.read_csv(p)
-        res = run_all_methods(
-            syn,
-            target_row,
-            schema=schema,
-            epsilon=args.epsilon,
-            fraction=args.fraction,
-        )
-        c = int(res["fraction_match"][0].sum())
-        in_counts.append(c)
-    out_counts = []
-    for p in out_files:
-        syn = pd.read_csv(p)
-        res = run_all_methods(
-            syn,
-            target_row,
-            schema=schema,
-            epsilon=args.epsilon,
-            fraction=args.fraction,
-        )
-        c = int(res["fraction_match"][0].sum())
-        out_counts.append(c)
+    n_jobs = max(1, args.n_jobs)
+    task_args = (target_row, schema, args.epsilon, args.fraction)
+    in_tasks = [(str(p),) + task_args for p in in_files]
+    out_tasks = [(str(p),) + task_args for p in out_files]
+
+    with Pool(processes=n_jobs) as pool:
+        in_results = pool.map(_count_worker, in_tasks)
+        out_results = pool.map(_count_worker, out_tasks)
+    in_count_map = {path_str: c for path_str, c in in_results}
+    out_count_map = {path_str: c for path_str, c in out_results}
+    in_counts = [in_count_map[str(p)] for p in in_files]
+    out_counts = [out_count_map[str(p)] for p in out_files]
 
     mean_in = sum(in_counts) / len(in_counts) if in_counts else 0.0
     mean_out = sum(out_counts) / len(out_counts) if out_counts else 0.0
 
     print("=" * 60)
-    print("Shadow target_{} 匹配统计（fraction={}, epsilon={}）".format(args.target_idx, args.fraction, args.epsilon))
+    print("Shadow target_{} 匹配统计（fraction={}, epsilon={}, 并行进程数 {}）".format(
+        args.target_idx, args.fraction, args.epsilon, n_jobs))
     print("=" * 60)
     print("  in  模型数: {},  匹配条数均值: {:.2f}".format(len(in_counts), mean_in))
     print("  out 模型数: {},  匹配条数均值: {:.2f}".format(len(out_counts), mean_out))
