@@ -30,3 +30,76 @@ CUDA_VISIBLE_DEVICES=7 python -m synthgen.train data=standard/law_school model=c
 CUDA_VISIBLE_DEVICES=7 python -m synthgen.train data=standard/compas model=ctgan model.params.device=cuda preprocess=monotonic train_rows=2000 synthetic_rows=2000 model.params.n_iter=300 model.params.batch_size=1024
 
   
+
+  nohup python -m synthgen.train \
+  data=standard/adult_openml \
+  model=ddpm model.params.device=cuda \
+  preprocess=monotonic \
+  train_rows=1000 synthetic_rows=1000 \
+  model.params.n_iter=300 model.params.batch_size=1024 \
+  shadow_model=true \
+  shadow.num_shadow_rounds=100 shadow.max_targets=1000 shadow.random_seed=42 \
+  shadow.engine=worker \
+  shadow.gpu_ids="[0,1,2,3,4,5,6,7]" \
+  shadow.worker_concurrency_per_gpu=4 \
+  shadow.reuse_mode=true \
+  shadow.reuse_num_bases=10 \
+  shadow.reuse_num_out_candidates=10 \
+  > train_ctgan_shadow.log 2>&1 &
+
+
+
+
+
+  nohup python -m synthgen.train \
+  data=standard/adult_openml \
+  model=ctgan model.params.device=cuda \
+  preprocess=monotonic \
+  train_rows=1000 synthetic_rows=100000 \
+  model.params.n_iter=300 model.params.batch_size=1024 \
+  shadow_model=true \
+  shadow.num_shadow_rounds=100 shadow.max_targets=100 shadow.random_seed=42 \
+  shadow.engine=worker \
+  shadow.gpu_ids="[0,1,2,3,4,5,6,7]" \
+  shadow.worker_concurrency_per_gpu=4 \
+  > train_ctgan_shadow.log 2>&1 &
+
+
+
+
+
+
+
+
+  python scripts/shadow_target_match_stats.py \
+  --run-dir outputs/train_adult_openml_preprocess_monotonic_train1000_synth100000_ctgan_300iter_20260216_105405 \
+  --max-targets 7 \
+  --fraction 0.7 \
+  --epsilon 0.1 \
+  --n-jobs 64 \
+  --output-dir outputs/match_demo_result/shadow_stats
+
+
+[1] 2804020
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+

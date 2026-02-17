@@ -120,6 +120,16 @@ def build_output_dir(cfg: DictConfig, project_root: Path) -> Path:
         except (TypeError, ValueError):
             pass
 
+    # batch_size（优先使用 model.params.batch_size，其次顶层 batch_size）
+    batch_size = OmegaConf.select(cfg, "model.params.batch_size", default=None)
+    if batch_size is None:
+        batch_size = getattr(cfg, "batch_size", None)
+    if batch_size is not None:
+        try:
+            parts.append(f"bs{int(batch_size)}")
+        except (TypeError, ValueError):
+            parts.append(f"bs{_safe_str(batch_size)}")
+
     # 时间戳
     parts.append(datetime.now().strftime("%Y%m%d_%H%M%S"))
 
