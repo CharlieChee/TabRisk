@@ -137,14 +137,16 @@ def _run_one_shadow_job(args: Tuple) -> Optional[str]:
     train_in_transformed = preproc.transform(train_in_k)
     train_out_transformed = preproc.transform(train_out_k)
 
-    model_in = _instantiate_model_from_cfg(model_cfg, seed + k * 2)
+    # in/out 使用相同 seed，保证 pair 内唯一差异仅为一条训练数据（leave-one-out 控制变量）
+    pair_seed = seed + k * 2
+    model_in = _instantiate_model_from_cfg(model_cfg, pair_seed)
     model_in.fit(train_in_transformed, schema)
     synth_in = model_in.sample(synth_rows)
     synth_in = preproc.inverse_transform(synth_in)
     out_in_path = target_dir / f"synthetic_round_{k}_in.csv"
     synth_in.to_csv(out_in_path, index=False)
 
-    model_out = _instantiate_model_from_cfg(model_cfg, seed + k * 2 + 1)
+    model_out = _instantiate_model_from_cfg(model_cfg, pair_seed)
     model_out.fit(train_out_transformed, schema)
     synth_out = model_out.sample(synth_rows)
     synth_out = preproc.inverse_transform(synth_out)
@@ -428,14 +430,16 @@ def _shadow_worker_process(
         train_out_transformed = preproc.transform(train_out_k)
 
         # 注意：种子公式与 _run_one_shadow_job 完全一致
-        model_in = _instantiate_model_from_cfg(model_cfg, seed + k * 2)
+        # in/out 使用相同 seed，保证 pair 内唯一差异仅为一条训练数据（leave-one-out 控制变量）
+        pair_seed = seed + k * 2
+        model_in = _instantiate_model_from_cfg(model_cfg, pair_seed)
         model_in.fit(train_in_transformed, schema)
         synth_in = model_in.sample(synth_rows)
         synth_in = preproc.inverse_transform(synth_in)
         out_in_path = target_dir / f"synthetic_round_{k}_in.csv"
         synth_in.to_csv(out_in_path, index=False)
 
-        model_out = _instantiate_model_from_cfg(model_cfg, seed + k * 2 + 1)
+        model_out = _instantiate_model_from_cfg(model_cfg, pair_seed)
         model_out.fit(train_out_transformed, schema)
         synth_out = model_out.sample(synth_rows)
         synth_out = preproc.inverse_transform(synth_out)
@@ -503,8 +507,8 @@ def _shadow_reuse_worker_process(
         train_df = _prepare_train_df_for_model(train_df)
         train_transformed = preproc.transform(train_df)
 
-        # 复用模式下不需要与 legacy 完全对齐的随机种子，仅保证可复现即可
-        model = _instantiate_model_from_cfg(model_cfg, seed + dataset_id * 2)
+        # 按 base_id 定 seed：同一 base 下的 in/out 数据集复用为同一逻辑 pair，须用相同随机数
+        model = _instantiate_model_from_cfg(model_cfg, seed + base_id * 2)
         model.fit(train_transformed, schema)
         synth = model.sample(synth_rows)
         synth = preproc.inverse_transform(synth)
