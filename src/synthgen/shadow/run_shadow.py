@@ -13,6 +13,7 @@ shadow_model=true 时支持多进程并行（num_workers × gpu_ids），每进�
 import hashlib
 import multiprocessing
 import os
+import random
 import shutil
 from concurrent.futures import ProcessPoolExecutor, as_completed
 from pathlib import Path
@@ -28,6 +29,19 @@ from synthgen.data.schema import Schema
 from synthgen.models.base import BaseModel
 from synthgen.preprocess import get_preprocessor
 from synthgen.utils.shadow_data import SHADOW_MEMBER_COL
+
+
+def _set_rng_seed(seed: int) -> None:
+    """在每次 fit 前重置全局 RNG，保证同一 pair 内 in/out 从相同随机状态开始。"""
+    random.seed(seed)
+    np.random.seed(seed)
+    try:
+        import torch
+        torch.manual_seed(seed)
+        if torch.cuda.is_available():
+            torch.cuda.manual_seed_all(seed)
+    except ImportError:
+        pass
 
 
 def _instantiate_model_from_cfg(model_cfg: DictConfig, seed: int) -> BaseModel:
@@ -137,8 +151,9 @@ def _run_one_shadow_job(args: Tuple) -> Optional[str]:
     train_in_transformed = preproc.transform(train_in_k)
     train_out_transformed = preproc.transform(train_out_k)
 
-    # in/out 使用相同 seed，保证 pair 内唯一差异仅为一条训练数据（leave-one-out 控制变量）
+    # in/out 使用相同 seed 并重置全局 RNG，保证 pair 内超参与随机数严格一致
     pair_seed = seed + k * 2
+    _set_rng_seed(pair_seed)
     model_in = _instantiate_model_from_cfg(model_cfg, pair_seed)
     model_in.fit(train_in_transformed, schema)
     synth_in = model_in.sample(synth_rows)
@@ -146,6 +161,7 @@ def _run_one_shadow_job(args: Tuple) -> Optional[str]:
     out_in_path = target_dir / f"synthetic_round_{k}_in.csv"
     synth_in.to_csv(out_in_path, index=False)
 
+    _set_rng_seed(pair_seed)
     model_out = _instantiate_model_from_cfg(model_cfg, pair_seed)
     model_out.fit(train_out_transformed, schema)
     synth_out = model_out.sample(synth_rows)
@@ -429,9 +445,9 @@ def _shadow_worker_process(
         train_in_transformed = preproc.transform(train_in_k)
         train_out_transformed = preproc.transform(train_out_k)
 
-        # 注意：种子公式与 _run_one_shadow_job 完全一致
-        # in/out 使用相同 seed，保证 pair 内唯一差异仅为一条训练数据（leave-one-out 控制变量）
+        # in/out 使用相同 seed 并重置全局 RNG，保证 pair 内超参与随机数严格一致
         pair_seed = seed + k * 2
+        _set_rng_seed(pair_seed)
         model_in = _instantiate_model_from_cfg(model_cfg, pair_seed)
         model_in.fit(train_in_transformed, schema)
         synth_in = model_in.sample(synth_rows)
@@ -439,6 +455,7 @@ def _shadow_worker_process(
         out_in_path = target_dir / f"synthetic_round_{k}_in.csv"
         synth_in.to_csv(out_in_path, index=False)
 
+        _set_rng_seed(pair_seed)
         model_out = _instantiate_model_from_cfg(model_cfg, pair_seed)
         model_out.fit(train_out_transformed, schema)
         synth_out = model_out.sample(synth_rows)
@@ -507,8 +524,10 @@ def _shadow_reuse_worker_process(
         train_df = _prepare_train_df_for_model(train_df)
         train_transformed = preproc.transform(train_df)
 
-        # 按 base_id 定 seed：同一 base 下的 in/out 数据集复用为同一逻辑 pair，须用相同随机数
-        model = _instantiate_model_from_cfg(model_cfg, seed + base_id * 2)
+        # 按 base_id 定 seed 并重置全局 RNG：同一 base 下的 in/out 复用为同一逻辑 pair，须严格同随机数
+        pair_seed = seed + base_id * 2
+        _set_rng_seed(pair_seed)
+        model = _instantiate_model_from_cfg(model_cfg, pair_seed)
         model.fit(train_transformed, schema)
         synth = model.sample(synth_rows)
         synth = preproc.inverse_transform(synth)
