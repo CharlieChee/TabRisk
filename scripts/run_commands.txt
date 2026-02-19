@@ -33,7 +33,7 @@ CUDA_VISIBLE_DEVICES=7 python -m synthgen.train data=standard/compas model=ctgan
 
   nohup python -m synthgen.train \
   data=standard/adult_openml \
-  model=ddpm model.params.device=cuda \
+  model=ctgan model.params.device=cuda \
   preprocess=monotonic \
   train_rows=1000 synthetic_rows=1000 \
   model.params.n_iter=300 model.params.batch_size=1024 \
@@ -91,9 +91,32 @@ python scripts/shadow_pair_metrics.py \
   --run-dir outputs/train_adult_openml_preprocess_monotonic_train1000_synth1000_ctgan_300iter_bs1024_candidate1000_20260218_160807 \
   --max-targets 32 \
   --n-jobs 32 \
-  --mmd-max-rows 1000 
+  --mmd-max-rows 1000
 
 
+
+# ---------- 已训练好且含 control 的影子模型：后续实验 ----------
+# 方式一：用 pipeline 脚本（推荐，跑完后自动打印保存文件说明与路径）
+python scripts/run_shadow_metrics_pipeline.py \
+  --run-dir outputs/train_adult_openml_preprocess_monotonic_train1000_synth1000_ctgan_300iter_bs1024_candidate100_control_20260219_153913/ \
+  --n-jobs 32 --max-targets 32 --mmd-max-rows 1000
+
+
+
+
+
+# ---------- 数据保存位置（均在 run_dir/shadow_pair_metrics/ 下） ----------
+# 来自 shadow_pair_metrics.py：
+#   pair_metrics.csv              每个 (target_idx, round_k) 的 in/out 对：MMD、列统计、target 最近邻 delta 等
+#   summary_by_target.csv        按 target 聚合的 in/out 指标（均值/方差等）
+#   pair_metrics_control.csv     （有 control 时）每个 round 的 control_in/control_out 对同样指标
+#   summary_by_target_control.csv（有 control 时）按 target 聚合的 control 指标
+# 来自 shadow_delta_analysis.py：
+#   global_delta_stats.json      delta_min_dist 总体统计（均值、置信区间、t/Wilcoxon 检验、Cohen's d）
+#   delta_distribution.png      delta 分布直方图
+#   control_comparison.json     （有 control 时）target delta vs control delta 成对对照（均值、t 检验等）
+#   mmd_component_analysis.json numeric-only vs mixed MMD 相关性等
+#   outlier_targets.json        异常 target 及 round 级 delta 列表
 
 
 

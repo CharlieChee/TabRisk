@@ -375,14 +375,17 @@ def main() -> None:
     task2_path = default_dir / "delta_distribution.png"
     task2_delta_visualization(summary_df, task2_path)
 
-    # 任务 3：control_comparison.json（仅当提供 control summary 时）
-    if args.control_summary_path:
-        ctrl_path = Path(args.control_summary_path)
-        if not ctrl_path.exists():
-            raise FileNotFoundError(f"control summary 文件不存在: {ctrl_path}")
+    # 任务 3：control_comparison.json（显式指定 --control-summary-path 或存在 summary_by_target_control.csv 时执行）
+    ctrl_path = Path(args.control_summary_path) if args.control_summary_path else default_dir / "summary_by_target_control.csv"
+    if ctrl_path.exists():
         summary_ctrl = pd.read_csv(ctrl_path)
         task3_path = default_dir / "control_comparison.json"
         task3_control_comparison(summary_df, summary_ctrl, task3_path, id_col=id_col_summary)
+        run_task3 = True
+    else:
+        run_task3 = False
+        if args.control_summary_path:
+            raise FileNotFoundError(f"control summary 文件不存在: {ctrl_path}")
 
     # 任务 4：mmd_component_analysis.json
     task4_path = default_dir / "mmd_component_analysis.json"
@@ -394,7 +397,7 @@ def main() -> None:
 
     print(f"global_delta_stats.json 已写入: {task1_path}")
     print(f"delta_distribution.png 已写入: {task2_path}")
-    if args.control_summary_path:
+    if run_task3:
         print(f"control_comparison.json 已写入: {task3_path}")
     print(f"mmd_component_analysis.json 已写入: {task4_path}")
     print(f"outlier_targets.json 已写入: {task5_path}")
