@@ -875,6 +875,7 @@ def _run_shadow_generation_reuse(
     strategy = str(shadow_cfg.get("target_selection_strategy", "random_k"))
     max_targets = int(shadow_cfg.get("max_targets", 10))
     target_mix = bool(shadow_cfg.get("target_mix", True))
+    control_branch = bool(shadow_cfg.get("control_branch", False))
 
     # 复用相关参数：可选，提供合理默认值
     _rb = shadow_cfg.get("reuse_num_bases", 10)
@@ -1060,11 +1061,23 @@ def _run_shadow_generation_reuse(
             out_dataset_id = _get_or_create_dataset_id(base_id, x_candidate_idx)
             usage_records.append((t_idx, k, "out", out_dataset_id))
 
+            # Control 分支：同一 base_id 下 (base_aux ∪ {r1}) 与 (base_aux ∪ {r2})，r1≠r2 且均≠target，尽量复用
+            if control_branch:
+                r_candidates = [i for i in range(len(candidate_df)) if i != target_idx]
+                if len(r_candidates) >= 2:
+                    rng_ctrl = np.random.default_rng(seed + t_idx * 10000 + k + 50000)
+                    r1_idx, r2_idx = rng_ctrl.choice(r_candidates, size=2, replace=False)
+                    r1_idx, r2_idx = int(r1_idx), int(r2_idx)
+                    ctrl_in_id = _get_or_create_dataset_id(base_id, r1_idx)
+                    ctrl_out_id = _get_or_create_dataset_id(base_id, r2_idx)
+                    usage_records.append((t_idx, k, "control_in", ctrl_in_id))
+                    usage_records.append((t_idx, k, "control_out", ctrl_out_id))
+
     total_unique_datasets = len(dataset_specs)
     logger.info(
         f"Shadow(reuse)：规划完成，targets={len(targets)}, rounds={num_rounds}, "
         f"unique_datasets={total_unique_datasets}, "
-        f"num_bases={num_bases}, out_pool_size={num_out_pool}"
+        f"num_bases={num_bases}, out_pool_size={num_out_pool}, control_branch={control_branch}"
     )
 
     # 保存复用模式下的数据集与使用关系的元数据，便于后续分析：
