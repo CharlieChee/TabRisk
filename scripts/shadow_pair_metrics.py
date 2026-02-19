@@ -50,8 +50,8 @@ NumericArray = np.ndarray
 class PairMetrics:
     target_idx: int
     round: int
-    mmd: float
-    mmd_numeric_only: bool
+    mmd_numeric: float
+    mmd_mixed: float
     min_dist_in: float
     min_dist_out: float
     delta_min_dist: float
@@ -388,7 +388,6 @@ def _compute_pair_metrics_for_target(
     run_dir: Path,
     target_idx: int,
     candidate_df: pd.DataFrame,
-    mmd_numeric_only: bool,
     mmd_max_rows: int,
 ) -> List[PairMetrics]:
     """对单个 target 计算所有 rounds 的 pair metrics。"""
@@ -412,17 +411,14 @@ def _compute_pair_metrics_for_target(
 
         num_cols, cat_cols = _split_numeric_categorical(in_df)
 
-        # 1) MMD：根据 mmd_numeric_only 决定是否加入类别列
-        if mmd_numeric_only or not cat_cols:
-            if num_cols:
-                x_num, y_num = _prepare_numeric_for_mmd(in_df, out_df, num_cols, max_rows=mmd_max_rows)
-                mmd_val = _compute_mmd_rbf(x_num, y_num, sigma=1.0)
-            else:
-                mmd_val = float("nan")
-            mmd_numeric_only_flag = True
+        # 1) MMD：同时计算数值-only 与混合型 MMD
+        if num_cols:
+            x_num, y_num = _prepare_numeric_for_mmd(in_df, out_df, num_cols, max_rows=mmd_max_rows)
+            mmd_numeric_val = _compute_mmd_rbf(x_num, y_num, sigma=1.0)
         else:
-            mmd_val = _compute_mmd_mixed(in_df, out_df, num_cols, cat_cols, max_rows=mmd_max_rows)
-            mmd_numeric_only_flag = False
+            mmd_numeric_val = float("nan")
+
+        mmd_mixed_val = _compute_mmd_mixed(in_df, out_df, num_cols, cat_cols, max_rows=mmd_max_rows)
 
         # 2) 列级差异统计
         num_mean_diff_mean, num_mean_diff_max, num_std_diff_mean, num_std_diff_max = _column_stats_numeric(
@@ -449,8 +445,8 @@ def _compute_pair_metrics_for_target(
             PairMetrics(
                 target_idx=target_idx,
                 round=k,
-                mmd=mmd_val,
-                mmd_numeric_only=bool(mmd_numeric_only_flag),
+                mmd_numeric=mmd_numeric_val,
+                mmd_mixed=mmd_mixed_val,
                 min_dist_in=min_dist_in,
                 min_dist_out=min_dist_out,
                 delta_min_dist=delta_min,
@@ -467,15 +463,14 @@ def _compute_pair_metrics_for_target(
 
 
 def _worker_compute_pair_metrics(
-    args: Tuple[Path, int, pd.DataFrame, bool, int],
+    args: Tuple[Path, int, pd.DataFrame, int],
 ) -> List[PairMetrics]:
     """multiprocessing.Pool 用的顶层 worker，避免本地函数不可 pickle 问题。"""
-    run_dir_i, ti_i, cand_df_i, mmd_num_only_i, mmd_max_rows_i = args
+    run_dir_i, ti_i, cand_df_i, mmd_max_rows_i = args
     return _compute_pair_metrics_for_target(
         run_dir=run_dir_i,
         target_idx=ti_i,
         candidate_df=cand_df_i,
-        mmd_numeric_only=mmd_num_only_i,
         mmd_max_rows=mmd_max_rows_i,
     )
 
@@ -486,8 +481,8 @@ def _pair_metrics_to_dataframe(rows: Sequence[PairMetrics]) -> pd.DataFrame:
         {
             "target_idx": r.target_idx,
             "round": r.round,
-            "mmd": r.mmd,
-            "mmd_numeric_only": r.mmd_numeric_only,
+            "mmd_numeric": r.mmd_numeric,
+            "mmd_mixed": r.mmd_mixed,
             "min_dist_in": r.min_dist_in,
             "min_dist_out": r.min_dist_out,
             "delta_min_dist": r.delta_min_dist,
@@ -547,11 +542,6 @@ def main() -> None:
         help="计算 MMD 时每侧最多使用的样本数，用于控制复杂度（默认 500）",
     )
     parser.add_argument(
-        "--mmd-numeric-only",
-        action="store_true",
-        help="仅基于数值列计算 MMD，并在输出列 mmd_numeric_only 中标记（默认行为）",
-    )
-    parser.add_argument(
         "--n-jobs",
         type=int,
         default=1,
@@ -589,7 +579,6 @@ def main() -> None:
                 run_dir=run_dir,
                 target_idx=ti,
                 candidate_df=candidate_df,
-                mmd_numeric_only=bool(args.mmd_numeric_only),
                 mmd_max_rows=int(args.mmd_max_rows),
             )
             all_rows.extend(res)
@@ -597,7 +586,7 @@ def main() -> None:
         from multiprocessing import Pool
 
         worker_args = [
-            (run_dir, ti, candidate_df, bool(args.mmd_numeric_only), int(args.mmd_max_rows))
+            (run_dir, ti, candidate_df, int(args.mmd_max_rows))
             for ti in target_indices
         ]
 
