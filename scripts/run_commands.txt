@@ -46,6 +46,7 @@ CUDA_VISIBLE_DEVICES=7 python -m synthgen.train data=standard/compas model=ctgan
   shadow.reuse_mode=true \
   shadow.reuse_num_bases=10 \
   shadow.reuse_num_out_candidates=10 \
+  shadow.reuse_num_control_candidates=10 \
   > train_ctgan_shadow.log 2>&1 &
 
 
