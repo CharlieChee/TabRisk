@@ -7,6 +7,10 @@ Shadow 数据生成流程（严格 leave-one-out 语义）。
 - out：train_out_k = base_aux_k ∪ {x}，x 为 non-member 且 x≠target
 - 唯一差异为是否包含 target
 
+control_branch=true 时，每轮额外生成严格 LOO 对照对：
+- control_in = base_aux_k ∪ {r1}，control_out = base_aux_k ∪ {r2}，r1≠r2 且均≠target
+- 保存为 synthetic_round_k_control_in.csv / synthetic_round_k_control_out.csv，供 delta 对照分析用。
+
 shadow_model=true 时支持多进程并行（num_workers × gpu_ids），每进程绑定一个 GPU。
 """
 
@@ -98,11 +102,11 @@ def _run_one_shadow_job(args: Tuple) -> Optional[str]:
     """
     单任务：在指定 GPU 上完成一个 (target_idx, round_k) 的 in/out 训练与合成。
     供多进程调用，必须为模块级函数且参数可 pickle。
-    args: (run_dir_str, t_idx, target_idx, k, gpu_id, N, n_base, synth_rows, seed)
+    args: (run_dir_str, t_idx, target_idx, k, gpu_id, N, n_base, synth_rows, seed[, control_branch])
 
     注意：
     - 此函数用于 legacy 引擎的 ProcessPoolExecutor 路径，保持原有行为不变；
-    - 高性能 worker 引擎不会调用该函数，而是复用内部逻辑以减少重复 I/O。
+    - 若提供 control_branch=True，额外生成 synthetic_round_k_control_in/out.csv 作为严格 LOO 对照。
     """
     (
         run_dir_str,
@@ -114,7 +118,8 @@ def _run_one_shadow_job(args: Tuple) -> Optional[str]:
         n_base,
         synth_rows,
         seed,
-    ) = args
+    ) = args[:9]
+    control_branch = bool(args[9]) if len(args) > 9 else False
     run_dir = Path(run_dir_str)
     os.environ["CUDA_VISIBLE_DEVICES"] = str(gpu_id)
 
@@ -168,6 +173,34 @@ def _run_one_shadow_job(args: Tuple) -> Optional[str]:
     synth_out = preproc.inverse_transform(synth_out)
     out_out_path = target_dir / f"synthetic_round_{k}_out.csv"
     synth_out.to_csv(out_out_path, index=False)
+
+    # Control 分支：严格 LOO 对照，base_aux 不变，仅将“最后一条”改为 r1 vs r2（均 ≠ target）
+    if control_branch:
+        r_candidates = [i for i in range(len(candidate_df)) if i != target_idx]
+        if len(r_candidates) >= 2:
+            r1_idx, r2_idx = rng.choice(r_candidates, size=2, replace=False)
+            r1_idx, r2_idx = int(r1_idx), int(r2_idx)
+            r1_row = candidate_df.iloc[r1_idx : r1_idx + 1].reset_index(drop=True)
+            r2_row = candidate_df.iloc[r2_idx : r2_idx + 1].reset_index(drop=True)
+            train_ctrl_in = pd.concat([base_aux_k, r1_row], axis=0, ignore_index=True)
+            train_ctrl_in = _prepare_train_df_for_model(train_ctrl_in)
+            train_ctrl_out = pd.concat([base_aux_k, r2_row], axis=0, ignore_index=True)
+            train_ctrl_out = _prepare_train_df_for_model(train_ctrl_out)
+            train_ctrl_in_t = preproc.transform(train_ctrl_in)
+            train_ctrl_out_t = preproc.transform(train_ctrl_out)
+            control_seed = seed + k * 2 + 10000
+            _set_rng_seed(control_seed)
+            model_ctrl_in = _instantiate_model_from_cfg(model_cfg, control_seed)
+            model_ctrl_in.fit(train_ctrl_in_t, schema)
+            synth_ctrl_in = model_ctrl_in.sample(synth_rows)
+            synth_ctrl_in = preproc.inverse_transform(synth_ctrl_in)
+            synth_ctrl_in.to_csv(target_dir / f"synthetic_round_{k}_control_in.csv", index=False)
+            _set_rng_seed(control_seed)
+            model_ctrl_out = _instantiate_model_from_cfg(model_cfg, control_seed)
+            model_ctrl_out.fit(train_ctrl_out_t, schema)
+            synth_ctrl_out = model_ctrl_out.sample(synth_rows)
+            synth_ctrl_out = preproc.inverse_transform(synth_ctrl_out)
+            synth_ctrl_out.to_csv(target_dir / f"synthetic_round_{k}_control_out.csv", index=False)
 
     return f"target_{t_idx} round_{k}"
 
@@ -232,6 +265,7 @@ def _run_shadow_generation_legacy(
     strategy = str(shadow_cfg.get("target_selection_strategy", "random_k"))
     max_targets = int(shadow_cfg.get("max_targets", 10))
     target_mix = bool(shadow_cfg.get("target_mix", True))
+    control_branch = bool(shadow_cfg.get("control_branch", False))
 
     # 并行配置：确保为整数/列表，避免 OmegaConf 返回 None 或错误类型导致误走顺序分支
     _nw = shadow_cfg.get("num_workers", 32)
@@ -352,6 +386,7 @@ def _run_shadow_generation_legacy(
             n_base,
             synth_rows,
             seed,
+            control_branch,
         )
         for j, (t_idx, target_idx, k) in enumerate(job_tuples)
     ]
@@ -392,6 +427,7 @@ def _shadow_worker_process(
     n_base: int,
     synth_rows: int,
     seed: int,
+    control_branch: bool = False,
 ) -> None:
     """
     高性能 Shadow worker 进程。
@@ -399,12 +435,12 @@ def _shadow_worker_process(
     - 每个进程绑定到单个 GPU（通过 CUDA_VISIBLE_DEVICES）；
     - 在进程启动后一次性加载 candidate/aux/schema/preprocessor；
     - 顺序执行分配给该 GPU 的所有 (t_idx, target_idx, k) 任务；
-    - 内部逻辑与 _run_one_shadow_job 完全对齐，以保持 MIA 语义。
+    - 若 control_branch=True，每任务额外生成 control_in/control_out 作为严格 LOO 对照。
     """
     run_dir = Path(run_dir_str)
     os.environ["CUDA_VISIBLE_DEVICES"] = str(gpu_id)
     logger.info(
-        f"[worker] GPU {gpu_id}: start, jobs={len(jobs)}, N={N}, n_base={n_base}, synth_rows={synth_rows}, seed={seed}"
+        f"[worker] GPU {gpu_id}: start, jobs={len(jobs)}, N={N}, n_base={n_base}, synth_rows={synth_rows}, seed={seed}, control_branch={control_branch}"
     )
 
     # 加载配置与数据：每个 worker 进程只执行一次
@@ -462,6 +498,34 @@ def _shadow_worker_process(
         synth_out = preproc.inverse_transform(synth_out)
         out_out_path = target_dir / f"synthetic_round_{k}_out.csv"
         synth_out.to_csv(out_out_path, index=False)
+
+        # Control 分支：严格 LOO 对照
+        if control_branch:
+            r_candidates = [i for i in range(len(candidate_df)) if i != target_idx]
+            if len(r_candidates) >= 2:
+                r1_idx, r2_idx = rng.choice(r_candidates, size=2, replace=False)
+                r1_idx, r2_idx = int(r1_idx), int(r2_idx)
+                r1_row = candidate_df.iloc[r1_idx : r1_idx + 1].reset_index(drop=True)
+                r2_row = candidate_df.iloc[r2_idx : r2_idx + 1].reset_index(drop=True)
+                train_ctrl_in = pd.concat([base_aux_k, r1_row], axis=0, ignore_index=True)
+                train_ctrl_in = _prepare_train_df_for_model(train_ctrl_in)
+                train_ctrl_out = pd.concat([base_aux_k, r2_row], axis=0, ignore_index=True)
+                train_ctrl_out = _prepare_train_df_for_model(train_ctrl_out)
+                train_ctrl_in_t = preproc.transform(train_ctrl_in)
+                train_ctrl_out_t = preproc.transform(train_ctrl_out)
+                control_seed = seed + k * 2 + 10000
+                _set_rng_seed(control_seed)
+                model_ctrl_in = _instantiate_model_from_cfg(model_cfg, control_seed)
+                model_ctrl_in.fit(train_ctrl_in_t, schema)
+                synth_ctrl_in = model_ctrl_in.sample(synth_rows)
+                synth_ctrl_in = preproc.inverse_transform(synth_ctrl_in)
+                synth_ctrl_in.to_csv(target_dir / f"synthetic_round_{k}_control_in.csv", index=False)
+                _set_rng_seed(control_seed)
+                model_ctrl_out = _instantiate_model_from_cfg(model_cfg, control_seed)
+                model_ctrl_out.fit(train_ctrl_out_t, schema)
+                synth_ctrl_out = model_ctrl_out.sample(synth_rows)
+                synth_ctrl_out = preproc.inverse_transform(synth_ctrl_out)
+                synth_ctrl_out.to_csv(target_dir / f"synthetic_round_{k}_control_out.csv", index=False)
 
         logger.debug(f"[worker] GPU {gpu_id}: done target_{t_idx} round_{k}")
 
@@ -595,6 +659,7 @@ def _run_shadow_generation_worker(
     strategy = str(shadow_cfg.get("target_selection_strategy", "random_k"))
     max_targets = int(shadow_cfg.get("max_targets", 10))
     target_mix = bool(shadow_cfg.get("target_mix", True))
+    control_branch = bool(shadow_cfg.get("control_branch", False))
 
     # 并行配置：worker 引擎支持每 GPU 多个并发 worker 进程
     gpu_ids_raw = shadow_cfg.get("gpu_ids")
@@ -736,7 +801,7 @@ def _run_shadow_generation_worker(
             continue
         p = ctx.Process(
             target=_shadow_worker_process,
-            args=(run_dir_str, int(gpu), jobs, N, n_base, synth_rows, seed),
+            args=(run_dir_str, int(gpu), jobs, N, n_base, synth_rows, seed, control_branch),
         )
         p.start()
         processes.append(p)

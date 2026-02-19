@@ -364,6 +364,9 @@ def main() -> None:
     summary_df = pd.read_csv(summary_path)
     pair_df = pd.read_csv(pair_path)
 
+    # summary 的 target id 列：pandas groupby 展平后可能是 target_idx 或 target_idx_
+    id_col_summary = "target_idx_" if "target_idx_" in summary_df.columns else "target_idx"
+
     # 任务 1：global_delta_stats.json
     task1_path = default_dir / "global_delta_stats.json"
     task1_global_delta_stats(summary_df, task1_path)
@@ -379,7 +382,7 @@ def main() -> None:
             raise FileNotFoundError(f"control summary 文件不存在: {ctrl_path}")
         summary_ctrl = pd.read_csv(ctrl_path)
         task3_path = default_dir / "control_comparison.json"
-        task3_control_comparison(summary_df, summary_ctrl, task3_path)
+        task3_control_comparison(summary_df, summary_ctrl, task3_path, id_col=id_col_summary)
 
     # 任务 4：mmd_component_analysis.json
     task4_path = default_dir / "mmd_component_analysis.json"
@@ -387,7 +390,7 @@ def main() -> None:
 
     # 任务 5：outlier_targets.json
     task5_path = default_dir / "outlier_targets.json"
-    task5_outlier_targets(summary_df, pair_df, task5_path)
+    task5_outlier_targets(summary_df, pair_df, task5_path, id_col_summary=id_col_summary)
 
     print(f"global_delta_stats.json 已写入: {task1_path}")
     print(f"delta_distribution.png 已写入: {task2_path}")

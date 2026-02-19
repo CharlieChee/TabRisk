@@ -118,6 +118,37 @@ def _get_round_files(target_dir: Path) -> List[Tuple[int, Path, Path]]:
     return pairs
 
 
+def _get_round_files_control(target_dir: Path) -> List[Tuple[int, Path, Path]]:
+    """枚举 target 目录下所有 (round_k, control_in_path, control_out_path)。"""
+    in_files = [p for p in target_dir.iterdir() if p.is_file() and p.name.endswith("_control_in.csv")]
+    out_files = [p for p in target_dir.iterdir() if p.is_file() and p.name.endswith("_control_out.csv")]
+
+    def _parse_round(p: Path) -> Optional[int]:
+        name = p.name
+        try:
+            core = name.split("synthetic_round_", 1)[1]
+            num = core.split("_", 1)[0]
+            return int(num)
+        except Exception:
+            return None
+
+    in_map: Dict[int, Path] = {}
+    for p in in_files:
+        k = _parse_round(p)
+        if k is not None:
+            in_map[k] = p
+
+    pairs: List[Tuple[int, Path, Path]] = []
+    for p in out_files:
+        k = _parse_round(p)
+        if k is None or k not in in_map:
+            continue
+        pairs.append((k, in_map[k], p))
+
+    pairs.sort(key=lambda x: x[0])
+    return pairs
+
+
 def _load_target_row(
     run_dir: Path,
     target_idx: int,
@@ -462,12 +493,97 @@ def _compute_pair_metrics_for_target(
     return results
 
 
+def _compute_control_pair_metrics_for_target(
+    run_dir: Path,
+    target_idx: int,
+    candidate_df: pd.DataFrame,
+    mmd_max_rows: int,
+) -> List[PairMetrics]:
+    """对单个 target 的 control 对 (control_in, control_out) 计算与 real 相同的 metrics。无 control 文件时返回 []。"""
+    target_dir = run_dir / "shadow" / f"target_{target_idx}"
+    if not target_dir.exists():
+        return []
+
+    pairs = _get_round_files_control(target_dir)
+    if not pairs:
+        return []
+
+    target_row = _load_target_row(run_dir, target_idx, candidate_df)
+
+    results: List[PairMetrics] = []
+    for k, in_path, out_path in pairs:
+        in_df = pd.read_csv(in_path)
+        out_df = pd.read_csv(out_path)
+        out_df = out_df[in_df.columns]
+
+        num_cols, cat_cols = _split_numeric_categorical(in_df)
+
+        if num_cols:
+            x_num, y_num = _prepare_numeric_for_mmd(in_df, out_df, num_cols, max_rows=mmd_max_rows)
+            mmd_numeric_val = _compute_mmd_rbf(x_num, y_num, sigma=1.0)
+        else:
+            mmd_numeric_val = float("nan")
+        mmd_mixed_val = _compute_mmd_mixed(in_df, out_df, num_cols, cat_cols, max_rows=mmd_max_rows)
+
+        num_mean_diff_mean, num_mean_diff_max, num_std_diff_mean, num_std_diff_max = _column_stats_numeric(
+            in_df, out_df, num_cols
+        )
+        cat_tv_mean, cat_tv_max = _column_stats_categorical(in_df, out_df, cat_cols)
+
+        if num_cols:
+            all_num = pd.concat([in_df[num_cols], out_df[num_cols]], axis=0, ignore_index=True).astype(float)
+            mu_joint = all_num.mean()
+            sigma_joint = all_num.std(ddof=0)
+        else:
+            mu_joint = None
+            sigma_joint = None
+
+        min_dist_in = _mixed_type_min_dist(target_row, in_df, num_cols, cat_cols, mu=mu_joint, sigma=sigma_joint)
+        min_dist_out = _mixed_type_min_dist(target_row, out_df, num_cols, cat_cols, mu=mu_joint, sigma=sigma_joint)
+        delta_min = min_dist_out - min_dist_in if not (math.isnan(min_dist_in) or math.isnan(min_dist_out)) else float(
+            "nan"
+        )
+
+        results.append(
+            PairMetrics(
+                target_idx=target_idx,
+                round=k,
+                mmd_numeric=mmd_numeric_val,
+                mmd_mixed=mmd_mixed_val,
+                min_dist_in=min_dist_in,
+                min_dist_out=min_dist_out,
+                delta_min_dist=delta_min,
+                num_mean_diff_mean=num_mean_diff_mean,
+                num_mean_diff_max=num_mean_diff_max,
+                num_std_diff_mean=num_std_diff_mean,
+                num_std_diff_max=num_std_diff_max,
+                cat_tv_mean=cat_tv_mean,
+                cat_tv_max=cat_tv_max,
+            )
+        )
+
+    return results
+
+
 def _worker_compute_pair_metrics(
     args: Tuple[Path, int, pd.DataFrame, int],
 ) -> List[PairMetrics]:
     """multiprocessing.Pool 用的顶层 worker，避免本地函数不可 pickle 问题。"""
     run_dir_i, ti_i, cand_df_i, mmd_max_rows_i = args
     return _compute_pair_metrics_for_target(
+        run_dir=run_dir_i,
+        target_idx=ti_i,
+        candidate_df=cand_df_i,
+        mmd_max_rows=mmd_max_rows_i,
+    )
+
+
+def _worker_compute_control_pair_metrics(
+    args: Tuple[Path, int, pd.DataFrame, int],
+) -> List[PairMetrics]:
+    """对 control 对计算 metrics 的 worker。"""
+    run_dir_i, ti_i, cand_df_i, mmd_max_rows_i = args
+    return _compute_control_pair_metrics_for_target(
         run_dir=run_dir_i,
         target_idx=ti_i,
         candidate_df=cand_df_i,
@@ -613,6 +729,42 @@ def main() -> None:
 
     print(f"pair_metrics.csv 已写入: {pair_path}")
     print(f"summary_by_target.csv 已写入: {summary_path}")
+
+    # Control 分支：若存在 control_in/control_out，计算并输出 summary_by_target_control.csv
+    control_targets = [
+        ti for ti in target_indices
+        if _get_round_files_control(run_dir / "shadow" / f"target_{ti}")
+    ]
+    if control_targets:
+        all_control_rows: List[PairMetrics] = []
+        if n_jobs == 1 or len(control_targets) == 1:
+            for ti in control_targets:
+                all_control_rows.extend(
+                    _compute_control_pair_metrics_for_target(
+                        run_dir=run_dir,
+                        target_idx=ti,
+                        candidate_df=candidate_df,
+                        mmd_max_rows=int(args.mmd_max_rows),
+                    )
+                )
+        else:
+            from multiprocessing import Pool
+            control_args = [
+                (run_dir, ti, candidate_df, int(args.mmd_max_rows))
+                for ti in control_targets
+            ]
+            with Pool(processes=n_jobs) as pool:
+                for res in pool.map(_worker_compute_control_pair_metrics, control_args):
+                    all_control_rows.extend(res)
+        if all_control_rows:
+            pair_control_df = _pair_metrics_to_dataframe(all_control_rows)
+            summary_control_df = _summarize_by_target(pair_control_df)
+            pair_control_path = out_dir / "pair_metrics_control.csv"
+            summary_control_path = out_dir / "summary_by_target_control.csv"
+            pair_control_df.to_csv(pair_control_path, index=False, float_format="%.4f")
+            summary_control_df.to_csv(summary_control_path, index=False, float_format="%.4f")
+            print(f"pair_metrics_control.csv 已写入: {pair_control_path}")
+            print(f"summary_by_target_control.csv 已写入: {summary_control_path}")
 
 
 if __name__ == "__main__":
