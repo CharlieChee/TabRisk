@@ -254,6 +254,85 @@ def _prepare_numeric_for_mmd(
     return x, y
 
 
+def _compute_mmd_mixed(
+    in_df: pd.DataFrame,
+    out_df: pd.DataFrame,
+    num_cols: Sequence[str],
+    cat_cols: Sequence[str],
+    max_rows: int,
+) -> float:
+    """
+    混合型 MMD：
+    - 数值部分：标准化后用 RBF kernel；
+    - 类别部分：用 Hamming 相似度 kernel（1 - mismatch_ratio）；
+    - 最终 kernel = 0.5 * K_num + 0.5 * K_cat（若某一类不存在则退化为另一类）。
+    """
+    has_num = bool(num_cols)
+    has_cat = bool(cat_cols)
+    if not has_num and not has_cat:
+        return float("nan")
+
+    # 下采样，避免 O(n^2) 过大
+    in_s = _sample_rows(in_df, max_rows=max_rows, random_state=0)
+    out_s = _sample_rows(out_df, max_rows=max_rows, random_state=1)
+
+    n, m = len(in_s), len(out_s)
+    if n < 2 or m < 2:
+        return float("nan")
+
+    # 数值部分 kernel
+    K_xx_num = K_yy_num = K_xy_num = None
+    if has_num:
+        x_num, y_num = _prepare_numeric_for_mmd(in_s, out_s, num_cols, max_rows=max_rows)
+        if x_num.size > 0 and y_num.size > 0:
+            K_xx_num = rbf_kernel(x_num, x_num, gamma=1.0 / 2.0)
+            K_yy_num = rbf_kernel(y_num, y_num, gamma=1.0 / 2.0)
+            K_xy_num = rbf_kernel(x_num, y_num, gamma=1.0 / 2.0)
+
+    # 类别部分 kernel：Hamming 相似度
+    K_xx_cat = K_yy_cat = K_xy_cat = None
+    if has_cat:
+        x_cat = in_s[cat_cols].astype(str).to_numpy(dtype=object)
+        y_cat = out_s[cat_cols].astype(str).to_numpy(dtype=object)
+        d_cat = x_cat.shape[1]
+        if d_cat > 0:
+            # xx
+            A = x_cat[:, None, :]  # n x 1 x d
+            B = x_cat[None, :, :]  # 1 x n x d
+            mismatches_xx = (A != B).mean(axis=2)  # n x n
+            K_xx_cat = 1.0 - mismatches_xx
+            # yy
+            A = y_cat[:, None, :]
+            B = y_cat[None, :, :]
+            mismatches_yy = (A != B).mean(axis=2)  # m x m
+            K_yy_cat = 1.0 - mismatches_yy
+            # xy
+            A = x_cat[:, None, :]  # n x 1 x d
+            B = y_cat[None, :, :]  # 1 x m x d
+            mismatches_xy = (A != B).mean(axis=2)  # n x m
+            K_xy_cat = 1.0 - mismatches_xy
+
+    # 组合 kernel，按是否存在数值/类别来加权
+    if has_num and K_xx_num is not None and has_cat and K_xx_cat is not None:
+        w_num = 0.5
+        w_cat = 0.5
+        K_xx = w_num * K_xx_num + w_cat * K_xx_cat
+        K_yy = w_num * K_yy_num + w_cat * K_yy_cat
+        K_xy = w_num * K_xy_num + w_cat * K_xy_cat
+    elif has_num and K_xx_num is not None:
+        K_xx, K_yy, K_xy = K_xx_num, K_yy_num, K_xy_num
+    elif has_cat and K_xx_cat is not None:
+        K_xx, K_yy, K_xy = K_xx_cat, K_yy_cat, K_xy_cat
+    else:
+        return float("nan")
+
+    np.fill_diagonal(K_xx, 0.0)
+    np.fill_diagonal(K_yy, 0.0)
+
+    mmd2 = K_xx.sum() / (n * (n - 1)) + K_yy.sum() / (m * (m - 1)) - 2.0 * K_xy.mean()
+    return float(max(mmd2, 0.0) ** 0.5)
+
+
 def _mixed_type_min_dist(
     target_row: pd.Series,
     df: pd.DataFrame,
@@ -321,12 +400,17 @@ def _compute_pair_metrics_for_target(
 
         num_cols, cat_cols = _split_numeric_categorical(in_df)
 
-        # 1) MMD：默认仅基于数值列（在输出中标记）
-        if num_cols:
-            x_num, y_num = _prepare_numeric_for_mmd(in_df, out_df, num_cols, max_rows=mmd_max_rows)
-            mmd_val = _compute_mmd_rbf(x_num, y_num, sigma=1.0)
+        # 1) MMD：根据 mmd_numeric_only 决定是否加入类别列
+        if mmd_numeric_only or not cat_cols:
+            if num_cols:
+                x_num, y_num = _prepare_numeric_for_mmd(in_df, out_df, num_cols, max_rows=mmd_max_rows)
+                mmd_val = _compute_mmd_rbf(x_num, y_num, sigma=1.0)
+            else:
+                mmd_val = float("nan")
+            mmd_numeric_only_flag = True
         else:
-            mmd_val = float("nan")
+            mmd_val = _compute_mmd_mixed(in_df, out_df, num_cols, cat_cols, max_rows=mmd_max_rows)
+            mmd_numeric_only_flag = False
 
         # 2) 列级差异统计
         num_mean_diff_mean, num_mean_diff_max, num_std_diff_mean, num_std_diff_max = _column_stats_numeric(
@@ -346,7 +430,7 @@ def _compute_pair_metrics_for_target(
                 target_idx=target_idx,
                 round=k,
                 mmd=mmd_val,
-                mmd_numeric_only=bool(mmd_numeric_only),
+                mmd_numeric_only=bool(mmd_numeric_only_flag),
                 min_dist_in=min_dist_in,
                 min_dist_out=min_dist_out,
                 delta_min_dist=delta_min,
