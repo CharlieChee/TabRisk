@@ -362,6 +362,20 @@ def _compute_pair_metrics_for_target(
     return results
 
 
+def _worker_compute_pair_metrics(
+    args: Tuple[Path, int, pd.DataFrame, bool, int],
+) -> List[PairMetrics]:
+    """multiprocessing.Pool 用的顶层 worker，避免本地函数不可 pickle 问题。"""
+    run_dir_i, ti_i, cand_df_i, mmd_num_only_i, mmd_max_rows_i = args
+    return _compute_pair_metrics_for_target(
+        run_dir=run_dir_i,
+        target_idx=ti_i,
+        candidate_df=cand_df_i,
+        mmd_numeric_only=mmd_num_only_i,
+        mmd_max_rows=mmd_max_rows_i,
+    )
+
+
 def _pair_metrics_to_dataframe(rows: Sequence[PairMetrics]) -> pd.DataFrame:
     """将 PairMetrics 列表转换为 DataFrame。"""
     data = [
@@ -483,18 +497,8 @@ def main() -> None:
             for ti in target_indices
         ]
 
-        def _worker(wrapper_args):
-            run_dir_i, ti_i, cand_df_i, mmd_num_only_i, mmd_max_rows_i = wrapper_args
-            return _compute_pair_metrics_for_target(
-                run_dir=run_dir_i,
-                target_idx=ti_i,
-                candidate_df=cand_df_i,
-                mmd_numeric_only=mmd_num_only_i,
-                mmd_max_rows=mmd_max_rows_i,
-            )
-
         with Pool(processes=n_jobs) as pool:
-            for res in pool.map(_worker, worker_args):
+            for res in pool.map(_worker_compute_pair_metrics, worker_args):
                 all_rows.extend(res)
 
     pair_df = _pair_metrics_to_dataframe(all_rows)
