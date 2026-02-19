@@ -338,20 +338,32 @@ def _mixed_type_min_dist(
     df: pd.DataFrame,
     num_cols: Sequence[str],
     cat_cols: Sequence[str],
+    mu: Optional[pd.Series] = None,
+    sigma: Optional[pd.Series] = None,
 ) -> float:
-    """计算 target_row 到 df 中所有行的 mixed-type 最小距离。"""
+    """
+    计算 target_row 到 df 中所有行的 mixed-type 最小距离。
+
+    为避免 in/out 使用不同坐标系，引入可选的 mu/sigma：
+    - 若提供 mu/sigma，则对 df 与 target 都用同一组统计量标准化（推荐：基于 in+out 联合）；
+    - 若未提供，则退化为使用 df 内部的均值/方差（仅作为后备方案）。
+    """
     n_rows = len(df)
     if n_rows == 0:
         return float("nan")
 
-    # 数值部分：使用 in/out 联合数据的均值/方差做标准化，这里简单用 df 内部统计
+    # 数值部分：优先使用外部传入的联合 mu/sigma
     if num_cols:
         data_num = df[num_cols].astype(float)
-        mu = data_num.mean()
-        sigma = data_num.std(ddof=0).replace(0.0, 1.0)
-        data_num_z = ((data_num - mu) / sigma).to_numpy(dtype=float)
+        if mu is None or sigma is None:
+            mu_local = data_num.mean()
+            sigma_local = data_num.std(ddof=0).replace(0.0, 1.0)
+        else:
+            mu_local = mu[num_cols]
+            sigma_local = sigma[num_cols].replace(0.0, 1.0)
+        data_num_z = ((data_num - mu_local) / sigma_local).to_numpy(dtype=float)
         t_num = target_row[num_cols].astype(float)
-        t_num_z = ((t_num - mu) / sigma).to_numpy(dtype=float)
+        t_num_z = ((t_num - mu_local) / sigma_local).to_numpy(dtype=float)
         # L2 / sqrt(d_num)
         diff = data_num_z - t_num_z.reshape(1, -1)
         d_num = diff ** 2
@@ -418,9 +430,17 @@ def _compute_pair_metrics_for_target(
         )
         cat_tv_mean, cat_tv_max = _column_stats_categorical(in_df, out_df, cat_cols)
 
-        # 3) target 最近邻距离
-        min_dist_in = _mixed_type_min_dist(target_row, in_df, num_cols, cat_cols)
-        min_dist_out = _mixed_type_min_dist(target_row, out_df, num_cols, cat_cols)
+        # 3) target 最近邻距离：在 in/out 联合数值分布上做统一标准化，避免坐标系不一致
+        if num_cols:
+            all_num = pd.concat([in_df[num_cols], out_df[num_cols]], axis=0, ignore_index=True).astype(float)
+            mu_joint = all_num.mean()
+            sigma_joint = all_num.std(ddof=0)
+        else:
+            mu_joint = None
+            sigma_joint = None
+
+        min_dist_in = _mixed_type_min_dist(target_row, in_df, num_cols, cat_cols, mu=mu_joint, sigma=sigma_joint)
+        min_dist_out = _mixed_type_min_dist(target_row, out_df, num_cols, cat_cols, mu=mu_joint, sigma=sigma_joint)
         delta_min = min_dist_out - min_dist_in if not (math.isnan(min_dist_in) or math.isnan(min_dist_out)) else float(
             "nan"
         )
@@ -596,11 +616,11 @@ def main() -> None:
     out_dir.mkdir(parents=True, exist_ok=True)
 
     pair_path = out_dir / "pair_metrics.csv"
-    pair_df.to_csv(pair_path, index=False)
+    pair_df.to_csv(pair_path, index=False, float_format="%.4f")
 
     summary_df = _summarize_by_target(pair_df)
     summary_path = out_dir / "summary_by_target.csv"
-    summary_df.to_csv(summary_path, index=False)
+    summary_df.to_csv(summary_path, index=False, float_format="%.4f")
 
     print(f"pair_metrics.csv 已写入: {pair_path}")
     print(f"summary_by_target.csv 已写入: {summary_path}")
