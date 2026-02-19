@@ -892,6 +892,13 @@ def _run_shadow_generation_reuse(
         reuse_num_out_candidates = 10
     reuse_num_out_candidates = max(1, reuse_num_out_candidates)
 
+    _rctrl = shadow_cfg.get("reuse_num_control_candidates", 10)
+    try:
+        reuse_num_control_candidates = int(_rctrl) if _rctrl is not None else 10
+    except (TypeError, ValueError):
+        reuse_num_control_candidates = 10
+    reuse_num_control_candidates = max(2, reuse_num_control_candidates)  # 至少 2 才能抽 r1≠r2
+
     # 并行配置：与 worker 引擎一致
     gpu_ids_raw = shadow_cfg.get("gpu_ids")
     if gpu_ids_raw is not None:
@@ -1017,6 +1024,30 @@ def _run_shadow_generation_reuse(
         replace=False,
     ).tolist()
 
+    # 2b) control 分支：预先选择少量候选作为 r1/r2 池，使唯一 dataset 约 2 倍于无 control
+    control_candidate_pool: List[int] = []
+    if control_branch:
+        num_ctrl_pool = min(reuse_num_control_candidates, n_non_member)
+        if num_ctrl_pool >= 2:
+            control_candidate_pool = rng.choice(
+                non_member_candidate_indices,
+                size=num_ctrl_pool,
+                replace=False,
+            ).tolist()
+        else:
+            # 若 non-member 不足 2，从全体 candidate 中补足（排除 member 会改变语义，仅作兜底）
+            all_other = [i for i in range(len(candidate_df)) if i not in member_candidate_indices]
+            if len(all_other) < 2:
+                all_other = [i for i in range(len(candidate_df))]
+            control_candidate_pool = (
+                rng.choice(all_other, size=min(reuse_num_control_candidates, len(all_other)), replace=False).tolist()
+                if len(all_other) >= 2
+                else []
+            )
+        logger.info(
+            f"Shadow(reuse)：control_candidate_pool 大小={len(control_candidate_pool)} (reuse_num_control_candidates={reuse_num_control_candidates})"
+        )
+
     # 3) 为每个 (t_idx, k, role) 分配一个唯一数据集键 (base_id, candidate_idx)
     #    并构建全局唯一数据集 -> dataset_id 的映射
     dataset_key_to_id: Dict[Tuple[int, int], int] = {}
@@ -1061,12 +1092,12 @@ def _run_shadow_generation_reuse(
             out_dataset_id = _get_or_create_dataset_id(base_id, x_candidate_idx)
             usage_records.append((t_idx, k, "out", out_dataset_id))
 
-            # Control 分支：同一 base_id 下 (base_aux ∪ {r1}) 与 (base_aux ∪ {r2})，r1≠r2 且均≠target，尽量复用
-            if control_branch:
-                r_candidates = [i for i in range(len(candidate_df)) if i != target_idx]
-                if len(r_candidates) >= 2:
+            # Control 分支：r1/r2 从小池 control_candidate_pool 中抽，保证唯一 dataset 约 2 倍于无 control
+            if control_branch and len(control_candidate_pool) >= 2:
+                valid_ctrl_pool = [i for i in control_candidate_pool if i != target_idx]
+                if len(valid_ctrl_pool) >= 2:
                     rng_ctrl = np.random.default_rng(seed + t_idx * 10000 + k + 50000)
-                    r1_idx, r2_idx = rng_ctrl.choice(r_candidates, size=2, replace=False)
+                    r1_idx, r2_idx = rng_ctrl.choice(valid_ctrl_pool, size=2, replace=False)
                     r1_idx, r2_idx = int(r1_idx), int(r2_idx)
                     ctrl_in_id = _get_or_create_dataset_id(base_id, r1_idx)
                     ctrl_out_id = _get_or_create_dataset_id(base_id, r2_idx)
