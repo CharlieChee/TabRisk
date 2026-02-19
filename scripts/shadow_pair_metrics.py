@@ -434,6 +434,12 @@ def main() -> None:
         help="仅基于数值列计算 MMD，并在输出列 mmd_numeric_only 中标记（默认行为）",
     )
     parser.add_argument(
+        "--n-jobs",
+        type=int,
+        default=1,
+        help="并行进程数（按 target 粒度并行，默认 1=不并行）",
+    )
+    parser.add_argument(
         "--output-dir",
         type=str,
         default=None,
@@ -456,16 +462,40 @@ def main() -> None:
     shadow_dir = run_dir / "shadow"
     target_indices = _find_shadow_targets(shadow_dir, args.max_targets)
 
+    # 按 target 维度并行：每个进程处理若干 target_i
     all_rows: List[PairMetrics] = []
-    for ti in target_indices:
-        res = _compute_pair_metrics_for_target(
-            run_dir=run_dir,
-            target_idx=ti,
-            candidate_df=candidate_df,
-            mmd_numeric_only=bool(args.mmd_numeric_only),
-            mmd_max_rows=int(args.mmd_max_rows),
-        )
-        all_rows.extend(res)
+    n_jobs = max(1, int(args.n_jobs))
+    if n_jobs == 1 or len(target_indices) == 1:
+        for ti in target_indices:
+            res = _compute_pair_metrics_for_target(
+                run_dir=run_dir,
+                target_idx=ti,
+                candidate_df=candidate_df,
+                mmd_numeric_only=bool(args.mmd_numeric_only),
+                mmd_max_rows=int(args.mmd_max_rows),
+            )
+            all_rows.extend(res)
+    else:
+        from multiprocessing import Pool
+
+        worker_args = [
+            (run_dir, ti, candidate_df, bool(args.mmd_numeric_only), int(args.mmd_max_rows))
+            for ti in target_indices
+        ]
+
+        def _worker(wrapper_args):
+            run_dir_i, ti_i, cand_df_i, mmd_num_only_i, mmd_max_rows_i = wrapper_args
+            return _compute_pair_metrics_for_target(
+                run_dir=run_dir_i,
+                target_idx=ti_i,
+                candidate_df=cand_df_i,
+                mmd_numeric_only=mmd_num_only_i,
+                mmd_max_rows=mmd_max_rows_i,
+            )
+
+        with Pool(processes=n_jobs) as pool:
+            for res in pool.map(_worker, worker_args):
+                all_rows.extend(res)
 
     pair_df = _pair_metrics_to_dataframe(all_rows)
 

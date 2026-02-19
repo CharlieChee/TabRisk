@@ -84,8 +84,11 @@ CUDA_VISIBLE_DEVICES=7 python -m synthgen.train data=standard/compas model=ctgan
 
 
 
-
-
+python scripts/shadow_pair_metrics.py \
+  --run-dir outputs/train_adult_openml_preprocess_monotonic_train1000_synth1000_ctgan_300iter_bs1024_candidate1000_20260218_160807 \
+  --max-targets 1000 \
+  --n-jobs 32 \
+  --mmd-max-rows 32 \
 
 
 
