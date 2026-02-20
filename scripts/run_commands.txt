@@ -36,18 +36,22 @@ CUDA_VISIBLE_DEVICES=7 python -m synthgen.train data=standard/compas model=ctgan
   model=ctgan model.params.device=cuda \
   preprocess=monotonic \
   train_rows=500 synthetic_rows=500 \
-  model.params.n_iter=2000 model.params.batch_size=256 \
+  model.params.n_iter=1000 model.params.batch_size=256 \
   shadow_model=true \
-  shadow.num_shadow_rounds=100 shadow.max_targets=100 shadow.random_seed=42 \
+  shadow.num_shadow_rounds=20 shadow.max_targets=100 shadow.random_seed=42 \
   shadow.engine=worker \
   shadow.control_branch=true \
   shadow.gpu_ids="[0,1,2,3,4,5,6,7]" \
   shadow.worker_concurrency_per_gpu=4 \
   shadow.reuse_mode=true \
-  shadow.reuse_num_bases=10 \
-  shadow.reuse_num_out_candidates=10 \
-  shadow.reuse_num_control_candidates=10 \
+  shadow.reuse_num_bases=5 \
+  shadow.reuse_num_out_candidates=5 \
+  shadow.reuse_num_control_candidates=5 \
   > train_ctgan_shadow.log 2>&1 &
+
+
+
+
 
 1. train_rows=1000 synthetic_rows=1000 model.params.n_iter=300 model.params.batch_size=256 
 
@@ -133,3 +137,38 @@ nohup bash scripts/run_six_shadow_metrics.sh > run_six_shadow_metrics.log 2>&1 &
 # train_adult_openml_preprocess_monotonic_train200_synth200_ctgan_2000iter_bs200_candidate100_control_20260220_020314/  -> mmd 200
 # train_adult_openml_preprocess_monotonic_train1000_synth1000_ctgan_300iter_bs256_candidate100_control_20260219_233544/  -> mmd 1000
 # train_adult_openml_preprocess_monotonic_train500_synth500_ctgan_300iter_bs256_candidate100_control_20260220_004442/   -> mmd 500
+
+
+# ---------- AUC / Stability 汇总与成图（基于已跑完的 control run） ----------
+# 在 outputs/ 下扫描所有带 control 的 run，用 pair_metrics + control + mmd_component_analysis 算 AUC/adv_auc 与 stability，出表出图
+python scripts/make_auc_stability_figs.py --outputs outputs --outdir outputs/figures
+
+
+# ========== 实验流程与当前工作（第一人称简述） ==========
+#
+# 一、整体实验流程
+#
+# 我做的是「表格合成数据 + 成员推断（MIA）」的一条龙实验，大致分四步：
+#
+# 1) 主训练与 Shadow 数据生成
+# 我跑 synthgen.train 时打开 shadow_model=true、control_branch=true，用 leave-one-out 语义为每个 target 生成 in/out 合成数据：训练集 in = base_aux ∪ {target}，out = base_aux ∪ {某条 non-member}，两者只差一条记录；同时为对照分析生成 control_in/control_out。每个 run 会得到 outputs/<run_dir>/，其中 shadow/ 下按 target 存 synthetic_round_k_in/out.csv 与可选的 control_in/out。run 目录名里会带 train_size、iter、batchsize 等，且含 "control" 的才是带对照的 run。
+#
+# 2) 单 run 的 pair 指标与 delta 分析
+# 对每个已跑完的 run_dir，我跑 run_shadow_metrics_pipeline.py（内部先 shadow_pair_metrics.py 再 shadow_delta_analysis.py）。这样在 run_dir/shadow_pair_metrics/ 下会得到：pair_metrics.csv（每个 target×round 的 in/out 对指标，含 MMD、delta_min_dist 等）、pair_metrics_control.csv（control 对的同样指标）、summary_by_target*.csv、以及 global_delta_stats.json、control_comparison.json、mmd_component_analysis.json 等。这些是后续做攻击效果和稳定性分析的数据来源。
+#
+# 3) 多 run 汇总与已有图表
+# 我已有脚本扫描 outputs 下名称含 control 的 run，把 global_delta_stats、control_comparison 等展平进汇总表（如 control_shadow_metrics_summary_auto.csv），并画 Cohen's d、delta 分布、replicate 稳定性等图（make_shadow_figures.py）。这些是「按 run 聚合」的视角，还没有显式做「区分 member vs non-member」的 AUC 和与 MMD 稳定性桥接的图。
+#
+# 4) 当前在做的事：AUC、Stability 与两张新图
+# 我在上述流程之上加了一步：只针对「完整」的 control run（即 shadow_pair_metrics/ 里同时有 pair_metrics.csv、control_comparison.json、mmd_component_analysis.json 的目录），做两件事。
+#
+# 第一件事是严格按「每个 pair 一行」算攻击效果：用 pair_metrics.csv 里的行当作 member（label=1），用 pair_metrics_control.csv 里的行当作 non-member（label=0），以 delta 列为 score（优先 delta_min_dist_mean，否则自动选 delta 列），在 per-pair 行级上算 ROC-AUC，得到 auc_in_out，再得到 adv_auc = AUC − 0.5（attack advantage），并对 pair 行做 bootstrap 得到 adv_auc 的 95% 置信区间。这样 AUC 完全基于样本级 pair 数据，不用 summary 均值，也不拿 Cohen's d 替代。
+#
+# 第二件事是从 mmd_component_analysis.json 里自动抽一个稳定性标量（优先 total/overall 类键，否则对全部数值取 mean），记作 stability_metric，并记下字段来源名 stability_metric_name，用作后续和 adv_auc 的桥接指标（可理解为 MMD 越大越不稳定/shift 越大）。
+#
+# 输出上，我生成一张新汇总表 outputs/control_shadow_metrics_summary_with_auc_stability.csv（包含原有 summary 的列再加上 auc_in_out、adv_auc、adv_auc_ci95_*、stability_metric、stability_metric_name），并画两张图：图 A 是 Adv(AUC) vs Train Size（按 iter 区分，同配置 jitter+均值点、y=0 参考线、有 bootstrap CI 或用 replicate std 做 error bar），图 B 是 Adv(AUC) vs Stability（按 train_size 颜色、iter 做 marker，带线性拟合与 Pearson r、p、R²，标题标明 higher stability_metric 表示更不稳定/更多 shift）。运行方式是无 GUI 的 Agg backend，跑完后在终端打印表路径、两张图路径、成功算 AUC 的 run 数、缺失 label/文件的 run 列表，以及每个 train_size 的 adv_auc 平均值摘要。
+#
+# 入口命令就是上面那行：
+#   python scripts/make_auc_stability_figs.py --outputs outputs --outdir outputs/figures
+#
+# 整体上，我先把 Shadow 的 in/out 与 control 数据跑出来，再在单 run 上算 pair 级指标和 delta/MMD 分析，最后在多 run 层面做 AUC、stability 汇总和这两张新图，把攻击优势（adv_auc）与训练规模、与 MMD 稳定性串起来看。
