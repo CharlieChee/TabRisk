@@ -84,7 +84,7 @@ CUDA_VISIBLE_DEVICES=7 python -m synthgen.train data=standard/compas model=ctgan
 # ---------- 已训练好且含 control 的影子模型：后续实验 ----------
 # 方式一：用 pipeline 脚本（推荐，跑完后自动打印保存文件说明与路径）
 nohup python scripts/run_shadow_metrics_pipeline.py \
-  --run-dir outputs/train_adult_openml_preprocess_monotonic_train500_synth500_ctgan_1000iter_bs256_candidate100_control_20260219_215030/ \
+  --run-dir outputs/train_adult_openml_preprocess_monotonic_train500_synth500_ctgan_2000iter_bs256_candidate100_control_20260220_082925/ \
   --n-jobs 32 \
   --max-targets 100 \
   --mmd-max-rows 1000 \
