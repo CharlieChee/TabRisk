@@ -35,8 +35,8 @@ CUDA_VISIBLE_DEVICES=7 python -m synthgen.train data=standard/compas model=ctgan
   data=standard/adult_openml \
   model=ctgan model.params.device=cuda \
   preprocess=monotonic \
-  train_rows=1000 synthetic_rows=1000 \
-  model.params.n_iter=300 model.params.batch_size=256 \
+  train_rows=500 synthetic_rows=500 \
+  model.params.n_iter=2000 model.params.batch_size=256 \
   shadow_model=true \
   shadow.num_shadow_rounds=100 shadow.max_targets=100 shadow.random_seed=42 \
   shadow.engine=worker \
@@ -84,7 +84,7 @@ CUDA_VISIBLE_DEVICES=7 python -m synthgen.train data=standard/compas model=ctgan
 # ---------- 已训练好且含 control 的影子模型：后续实验 ----------
 # 方式一：用 pipeline 脚本（推荐，跑完后自动打印保存文件说明与路径）
 nohup python scripts/run_shadow_metrics_pipeline.py \
-  --run-dir outputs/train_adult_openml_preprocess_monotonic_train1000_synth1000_ctgan_1000iter_bs256_candidate100_control_20260219_192129/ \
+  --run-dir outputs/train_adult_openml_preprocess_monotonic_train500_synth500_ctgan_1000iter_bs256_candidate100_control_20260219_215030/ \
   --n-jobs 32 \
   --max-targets 100 \
   --mmd-max-rows 1000 \
@@ -121,3 +121,15 @@ nohup python scripts/run_shadow_metrics_pipeline.py \
 
 
 
+# ---------- 6 个 run_dir 按顺序跑 shadow metrics pipeline（一键后台） ----------
+# mmd-max-rows = min(train_rows, 1000)：train200->200, train500->500, train1000->1000
+# 每个 run 的日志在 scripts/ 下 run_shadow_metrics_<dirname>.log，或设 LOG_DIR 指定目录
+nohup bash scripts/run_six_shadow_metrics.sh > run_six_shadow_metrics.log 2>&1 &
+
+# 上述 6 个路径（供对照）：
+# train_adult_openml_preprocess_monotonic_train1000_synth1000_ctgan_1000iter_bs128_candidate100_control_20260220_025014/  -> mmd 1000
+# train_adult_openml_preprocess_monotonic_train1000_synth1000_ctgan_300iter_bs128_candidate100_control_20260220_063750/   -> mmd 1000
+# train_adult_openml_preprocess_monotonic_train200_synth200_ctgan_1000iter_bs200_candidate100_control_20260220_011714/  -> mmd 200
+# train_adult_openml_preprocess_monotonic_train200_synth200_ctgan_2000iter_bs200_candidate100_control_20260220_020314/  -> mmd 200
+# train_adult_openml_preprocess_monotonic_train1000_synth1000_ctgan_300iter_bs256_candidate100_control_20260219_233544/  -> mmd 1000
+# train_adult_openml_preprocess_monotonic_train500_synth500_ctgan_300iter_bs256_candidate100_control_20260220_004442/   -> mmd 500
