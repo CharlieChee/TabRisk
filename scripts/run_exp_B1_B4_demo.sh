@@ -2,6 +2,8 @@
 # 实验 B1–B4：按顺序执行 8 个 run（4 配置 × 2 seeds），可 nohup 后台运行
 # B1–B4 仅 rounds 不同：5, 10, 20, 40；其余 train_rows=500, n_iter=1000, batch_size=256
 #
+# 可执行权限（可选，有则可直接 ./scripts/...）：
+#   chmod +x scripts/run_exp_B1_B4_demo.sh
 # 后台运行（推荐）：
 #   cd /Users/changlong.ji/Desktop/project/TabRisk
 #   nohup bash scripts/run_exp_B1_B4_demo.sh > run_exp_B1_B4.log 2>&1 &

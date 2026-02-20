@@ -1,11 +1,15 @@
 #!/usr/bin/env bash
 # 实验 A1–A4：按顺序执行 12 个 run（4 配置 × 3 seeds），可 nohup 后台运行
 #
+# 可执行权限（可选，有则可直接 ./scripts/...）：
+#   chmod +x scripts/run_exp_A1_A4_demo.sh
 # 后台运行（推荐）：
 #   cd /Users/changlong.ji/Desktop/project/TabRisk
 #   nohup bash scripts/run_exp_A1_A4_demo.sh > run_exp_A1_A4.log 2>&1 &
 # 前台运行：
 #   bash scripts/run_exp_A1_A4_demo.sh
+# 断点续跑：已完成的 run 会跳过（依据 logs_exp_A1_A4/*.done）。若中途杀进程，
+# 可先根据旧 log 标记已完成再重跑：bash scripts/resume_exp_A1_A4_from_log.sh
 
 set -e
 cd "$(dirname "$0")/.."
@@ -26,6 +30,11 @@ run_one() {
   local batch_size=$4
   local rounds=$5
   local seed=$6
+  local done_file="$LOG_DIR/${exp_id}_rows${train_rows}_seed${seed}.done"
+  if [ -f "$done_file" ]; then
+    echo "[$(date '+%Y-%m-%d %H:%M:%S')] Skip (already done): $exp_id train_rows=$train_rows seed=$seed"
+    return 0
+  fi
   local log_file="$LOG_DIR/${exp_id}_rows${train_rows}_seed${seed}.log"
   echo "[$(date '+%Y-%m-%d %H:%M:%S')] Start: $exp_id train_rows=$train_rows seed=$seed -> $log_file"
   python -m synthgen.train \
@@ -45,6 +54,7 @@ run_one() {
     shadow.reuse_num_out_candidates=5 \
     shadow.reuse_num_control_candidates=5 \
     >> "$log_file" 2>&1
+  touch "$done_file"
   echo "[$(date '+%Y-%m-%d %H:%M:%S')] Done:  $exp_id train_rows=$train_rows seed=$seed"
 }
 
