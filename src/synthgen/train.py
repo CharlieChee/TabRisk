@@ -141,6 +141,12 @@ def build_output_dir(cfg: DictConfig, project_root: Path) -> Path:
                 parts.append(f"candidate{_safe_str(max_targets)}")
         if OmegaConf.select(cfg, "shadow.control_branch", default=False):
             parts.append("control")
+        shadow_seed = OmegaConf.select(cfg, "shadow.random_seed", default=None)
+        if shadow_seed is not None:
+            try:
+                parts.append(f"seed{int(shadow_seed)}")
+            except (TypeError, ValueError):
+                parts.append(f"seed{_safe_str(shadow_seed)}")
 
     # 时间戳
     parts.append(datetime.now().strftime("%Y%m%d_%H%M%S"))
