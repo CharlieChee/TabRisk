@@ -7,8 +7,8 @@ CUDA_VISIBLE_DEVICES=7 python -m synthgen.train \
   model=ctgan \
   model.params.device=cuda \
   preprocess=monotonic \
-  train_rows=2000 \
-  synthetic_rows=2000 \
+  train_rows=200 \
+  synthetic_rows=200 \
   model.params.n_iter=300 \
   model.params.batch_size=1024
 
