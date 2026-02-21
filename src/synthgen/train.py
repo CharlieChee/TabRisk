@@ -130,9 +130,15 @@ def build_output_dir(cfg: DictConfig, project_root: Path) -> Path:
         except (TypeError, ValueError):
             parts.append(f"bs{_safe_str(batch_size)}")
 
-    # 影子模型模式：将 max_targets 以 candidate 名称写入路径；control_branch 时加 control
+    # 影子模型模式：将 max_targets、num_shadow_rounds 写入路径；control_branch 时加 control
     shadow_model_enabled = getattr(cfg, "shadow_model", False) or False
     if shadow_model_enabled:
+        num_shadow_rounds = OmegaConf.select(cfg, "shadow.num_shadow_rounds", default=None)
+        if num_shadow_rounds is not None:
+            try:
+                parts.append(f"rounds{int(num_shadow_rounds)}")
+            except (TypeError, ValueError):
+                parts.append(f"rounds{_safe_str(num_shadow_rounds)}")
         max_targets = OmegaConf.select(cfg, "shadow.max_targets", default=None)
         if max_targets is not None:
             try:
