@@ -26,6 +26,8 @@ RUN_DIRS=(
   "train_adult_openml_preprocess_monotonic_train500_synth500_ctgan_200iter_bs256_rounds20_candidate100_control_seed42_20260221_064151"
   "train_adult_openml_preprocess_monotonic_train500_synth500_ctgan_300iter_bs256_rounds20_candidate100_control_seed42_20260221_065205"
   "train_adult_openml_preprocess_monotonic_train500_synth500_ctgan_300iter_bs256_rounds20_candidate100_control_seed43_20260221_070610"
+  "train_adult_openml_preprocess_monotonic_train500_synth500_ctgan_4000iter_bs256_rounds20_candidate100_control_seed42_20260221_103553"
+  "train_adult_openml_preprocess_monotonic_train500_synth500_ctgan_600iter_bs256_rounds20_candidate100_control_seed42_20260221_072015"
 )
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -35,7 +37,17 @@ cd "$PROJECT_ROOT"
 LOG_DIR="${PROJECT_ROOT}/logs_shadow_metrics_batch"
 mkdir -p "$LOG_DIR"
 
-echo "批量启动 shadow metrics pipeline，共 ${#RUN_DIRS[@]} 个 run_dir"
+# 已完成的标志：shadow_pair_metrics 下存在 pair_metrics.csv 与 summary_by_target.csv
+is_done() {
+  local dir="$1"
+  [[ -f "${dir}shadow_pair_metrics/pair_metrics.csv" && -f "${dir}shadow_pair_metrics/summary_by_target.csv" ]]
+}
+
+total=${#RUN_DIRS[@]}
+skipped=0
+launched=0
+
+echo "批量启动 shadow metrics pipeline，共 $total 个 run_dir（已跑过的将跳过）"
 echo "日志目录: $LOG_DIR"
 echo ""
 
@@ -43,15 +55,21 @@ for i in "${!RUN_DIRS[@]}"; do
   name="${RUN_DIRS[$i]}"
   run_dir="outputs/${name}/"
   log_file="${LOG_DIR}/${name}.log"
-  echo "[$((i+1))/${#RUN_DIRS[@]}] 启动: $name"
-  nohup python scripts/run_shadow_metrics_pipeline.py \
-    --run-dir "$run_dir" \
-    --n-jobs 32 \
-    --max-targets 100 \
-    --mmd-max-rows 1000 \
-    >> "$log_file" 2>&1 &
-  sleep 2
+  if is_done "$run_dir"; then
+    echo "[$((i+1))/$total] 跳过（已完成）: $name"
+    ((skipped++)) || true
+  else
+    echo "[$((i+1))/$total] 启动: $name"
+    nohup python scripts/run_shadow_metrics_pipeline.py \
+      --run-dir "$run_dir" \
+      --n-jobs 32 \
+      --max-targets 100 \
+      --mmd-max-rows 1000 \
+      >> "$log_file" 2>&1 &
+    ((launched++)) || true
+    sleep 2
+  fi
 done
 
 echo ""
-echo "已全部在后台启动。查看进度: tail -f $LOG_DIR/<run_dir_name>.log"
+echo "已跳过 $skipped 个，新启动 $launched 个。查看进度: tail -f $LOG_DIR/<run_dir_name>.log"
