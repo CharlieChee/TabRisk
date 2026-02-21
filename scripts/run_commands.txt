@@ -156,6 +156,8 @@ python scripts/make_auc_stability_figs.py --outputs outputs --outdir outputs/fig
 python scripts/adult_ctgan_loomia_postprocess.py --outputs outputs --outdir outputs/postprocess_adult_ctgan
 # 含 Fig5（learned attacker）时：
 python scripts/adult_ctgan_loomia_postprocess.py --outputs outputs --outdir outputs/postprocess_adult_ctgan --with-fig5
+# 多进程加速（例如 8 进程）：扫描+AUC 与 Fig5 均并行
+python scripts/adult_ctgan_loomia_postprocess.py --outputs outputs --outdir outputs/postprocess_adult_ctgan --with-fig5 --n-jobs 8
 
 
 # ========== 实验流程与当前工作（第一人称简述） ==========

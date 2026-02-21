@@ -18,6 +18,7 @@ from __future__ import annotations
 import argparse
 import json
 import re
+from concurrent.futures import ProcessPoolExecutor
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
@@ -199,6 +200,56 @@ def compute_auc_adv_ci(
     return auc, adv, ci_low, ci_high, None
 
 
+def _process_one_run(run_dir_str: str) -> Optional[Dict[str, Any]]:
+    """
+    单 run 处理（供多进程调用）：解析 + AUC/CI + stability，返回 row 或 None。
+    参数为 run_dir 的字符串路径以便 pickle。
+    """
+    run_dir = Path(run_dir_str)
+    metrics_dir = run_dir / "shadow_pair_metrics"
+    parsed = parse_run_dir(run_dir.name)
+    if parsed.get("rounds_per_target") is None:
+        parsed["rounds_per_target"] = _get_rounds_from_config(run_dir)
+    if parsed.get("seed") is None:
+        parsed["seed"] = _get_seed_from_config(run_dir)
+
+    pair_path = metrics_dir / "pair_metrics.csv"
+    pair_control_path = metrics_dir / "pair_metrics_control.csv"
+    mmd_path = metrics_dir / "mmd_component_analysis.json"
+    ts = parsed.get("timestamp") or ""
+    mtime = pair_path.stat().st_mtime if pair_path.exists() else 0
+
+    auc_val, adv_val, ci_low, ci_high, err = compute_auc_adv_ci(pair_path, pair_control_path)
+    if err:
+        return None
+    stab_val, stab_name = extract_stability(mmd_path)
+
+    return {
+        "train_rows": parsed.get("train_rows"),
+        "n_iter": parsed.get("n_iter"),
+        "batch_size": parsed.get("batch_size"),
+        "rounds": parsed.get("rounds_per_target"),
+        "candidate": parsed.get("candidate"),
+        "seed": parsed.get("seed"),
+        "timestamp": ts,
+        "run_dir": run_dir.name,
+        "run_dir_path": str(run_dir.resolve()),
+        "auc_in_out": auc_val,
+        "adv_auc": adv_val,
+        "adv_auc_ci95_low": ci_low,
+        "adv_auc_ci95_high": ci_high,
+        "stability_metric": stab_val if stab_val is not None else np.nan,
+        "stability_metric_name": stab_name if stab_name else "",
+        "_mtime": mtime,
+    }
+
+
+def _learned_auc_worker(run_dir_path: str) -> Optional[float]:
+    """单 run 的 learned AUC（供多进程调用）。参数为路径字符串。"""
+    auc, _ = compute_learned_auc_one_run(run_dir_path)
+    return auc
+
+
 def extract_stability(mmd_path: Path) -> Tuple[Optional[float], Optional[str]]:
     """
     从 mmd_component_analysis.json 提取 stability_metric。
@@ -233,10 +284,11 @@ def extract_stability(mmd_path: Path) -> Tuple[Optional[float], Optional[str]]:
     return float(np.mean([v for _, v in scalars])), "mean_of_components"
 
 
-def scan_and_dedup(outputs_dir: Path) -> Tuple[pd.DataFrame, Dict[str, Any]]:
+def scan_and_dedup(outputs_dir: Path, n_jobs: int = 1) -> Tuple[pd.DataFrame, Dict[str, Any]]:
     """
     扫描 outputs 下含 shadow_pair_metrics 的 run（名称需含 adult 与 control），
     解析元信息、计算 run-level 指标，按 run_key 去重（保留时间戳最新）。
+    n_jobs>1 时用多进程并行处理每个 run。
     返回 (summary_df, report_stats)。
     """
     outputs_dir = outputs_dir.resolve()
@@ -265,48 +317,20 @@ def scan_and_dedup(outputs_dir: Path) -> Tuple[pd.DataFrame, Dict[str, Any]]:
         candidates.append(d)
 
     report["complete_before_dedup"] = len(candidates)
-    rows: List[Dict[str, Any]] = []
-    for run_dir in candidates:
-        metrics_dir = run_dir / "shadow_pair_metrics"
-        parsed = parse_run_dir(run_dir.name)
-        # 若目录名未解析出 rounds/seed，可从 train_config.yaml 补
-        if parsed.get("rounds_per_target") is None:
-            r = _get_rounds_from_config(run_dir)
-            parsed["rounds_per_target"] = r
-        if parsed.get("seed") is None:
-            s = _get_seed_from_config(run_dir)
-            parsed["seed"] = s
+    run_dir_strs = [str(r.resolve()) for r in candidates]
 
-        pair_path = metrics_dir / "pair_metrics.csv"
-        pair_control_path = metrics_dir / "pair_metrics_control.csv"
-        mmd_path = metrics_dir / "mmd_component_analysis.json"
-        ts = parsed.get("timestamp") or ""
-        mtime = pair_path.stat().st_mtime if pair_path.exists() else 0
-
-        auc_val, adv_val, ci_low, ci_high, err = compute_auc_adv_ci(pair_path, pair_control_path)
-        if err:
-            continue
-        stab_val, stab_name = extract_stability(mmd_path)
-
-        row = {
-            "train_rows": parsed.get("train_rows"),
-            "n_iter": parsed.get("n_iter"),
-            "batch_size": parsed.get("batch_size"),
-            "rounds": parsed.get("rounds_per_target"),
-            "candidate": parsed.get("candidate"),
-            "seed": parsed.get("seed"),
-            "timestamp": ts,
-            "run_dir": run_dir.name,
-            "run_dir_path": str(run_dir.resolve()),
-            "auc_in_out": auc_val,
-            "adv_auc": adv_val,
-            "adv_auc_ci95_low": ci_low,
-            "adv_auc_ci95_high": ci_high,
-            "stability_metric": stab_val if stab_val is not None else np.nan,
-            "stability_metric_name": stab_name if stab_name else "",
-            "_mtime": mtime,
-        }
-        rows.append(row)
+    if n_jobs <= 1 or len(run_dir_strs) == 0:
+        rows: List[Dict[str, Any]] = []
+        for run_dir in candidates:
+            row = _process_one_run(str(run_dir.resolve()))
+            if row is not None:
+                rows.append(row)
+    else:
+        rows = []
+        with ProcessPoolExecutor(max_workers=n_jobs) as executor:
+            for result in executor.map(_process_one_run, run_dir_strs):
+                if result is not None:
+                    rows.append(result)
 
     if not rows:
         df = pd.DataFrame()
@@ -734,6 +758,7 @@ def main() -> int:
     parser.add_argument("--outputs", type=Path, default=PROJECT_ROOT / "outputs", help="outputs 根目录")
     parser.add_argument("--outdir", type=Path, default=PROJECT_ROOT / "outputs" / "postprocess_adult_ctgan", help="输出目录（CSV/图/报告）")
     parser.add_argument("--with-fig5", action="store_true", help="是否计算并绘制 Fig5 learned attacker")
+    parser.add_argument("--n-jobs", type=int, default=1, help="并行进程数（扫描+AUC 与 Fig5 均生效）；1=单进程")
     args = parser.parse_args()
 
     outputs_dir = args.outputs.resolve()
@@ -742,7 +767,7 @@ def main() -> int:
         return 1
 
     # 1) 扫描 + 去重 → 总表
-    summary, scan_report = scan_and_dedup(outputs_dir)
+    summary, scan_report = scan_and_dedup(outputs_dir, n_jobs=args.n_jobs)
     outdir = args.outdir.resolve()
     outdir.mkdir(parents=True, exist_ok=True)
 
@@ -787,21 +812,26 @@ def main() -> int:
 
     # 5) 可选 Fig5 learned attacker
     if args.with_fig5:
+        n_jobs_fig5 = max(1, args.n_jobs)
         scaling_with_learned = scaling_balanced.copy()
-        learned_vals = []
-        for _, row in scaling_with_learned.iterrows():
-            auc, err = compute_learned_auc_one_run(row["run_dir_path"])
-            learned_vals.append(auc if auc is not None else np.nan)
-        scaling_with_learned["learned_adv"] = learned_vals
+        paths_a = scaling_with_learned["run_dir_path"].tolist()
+        if n_jobs_fig5 <= 1:
+            learned_vals = [_learned_auc_worker(p) for p in paths_a]
+        else:
+            with ProcessPoolExecutor(max_workers=n_jobs_fig5) as executor:
+                learned_vals = list(executor.map(_learned_auc_worker, paths_a))
+        scaling_with_learned["learned_adv"] = [np.nan if v is None else v for v in learned_vals]
         if not scaling_with_learned["learned_adv"].isna().all():
             fig5a_learned_scaling(scaling_with_learned, fig_dir / "fig5a_learned_scaling.png")
             print(f"Fig5A: {fig_dir / 'fig5a_learned_scaling.png'}")
         rounds_with_learned = rounds_balanced.copy()
-        learned_vals_b = []
-        for _, row in rounds_with_learned.iterrows():
-            auc, _ = compute_learned_auc_one_run(row["run_dir_path"])
-            learned_vals_b.append(auc if auc is not None else np.nan)
-        rounds_with_learned["learned_adv"] = learned_vals_b
+        paths_b = rounds_with_learned["run_dir_path"].tolist()
+        if n_jobs_fig5 <= 1:
+            learned_vals_b = [_learned_auc_worker(p) for p in paths_b]
+        else:
+            with ProcessPoolExecutor(max_workers=n_jobs_fig5) as executor:
+                learned_vals_b = list(executor.map(_learned_auc_worker, paths_b))
+        rounds_with_learned["learned_adv"] = [np.nan if v is None else v for v in learned_vals_b]
         if not rounds_with_learned["learned_adv"].isna().all():
             fig5b_learned_saturation(rounds_with_learned, fig_dir / "fig5b_learned_saturation.png")
             print(f"Fig5B: {fig_dir / 'fig5b_learned_saturation.png'}")
