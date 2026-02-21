@@ -160,6 +160,14 @@ python scripts/adult_ctgan_loomia_postprocess.py --outputs outputs --outdir outp
 python scripts/adult_ctgan_loomia_postprocess.py --outputs outputs --outdir outputs/postprocess_adult_ctgan --with-fig5 --n-jobs 8
 
 
+# ---------- 统计分析（锁定数据 + 显著性检验 + 偏相关 + 稳健回归 + learned 检验） ----------
+# 依赖：先跑完上面后处理，得到 adult_ctgan_run_summary.csv
+# 产出：scaling/rounds/iter_balanced.csv、dropped_runs.csv、table1–3 检验表、table4 偏相关、table5 稳健回归、table6–7 learned 检验、fig7–fig10
+python scripts/adult_ctgan_statistical_analysis.py --summary outputs/postprocess_adult_ctgan/adult_ctgan_run_summary.csv --outdir outputs/postprocess_adult_ctgan/stats
+# 若已有带 learned_adv 的 scaling 表（如后处理加了 --with-fig5 并手动合并过），可传入做 learned 检验：
+# python scripts/adult_ctgan_statistical_analysis.py ... --scaling-with-learned outputs/postprocess_adult_ctgan/scaling_with_learned.csv
+
+
 # ========== 实验流程与当前工作（第一人称简述） ==========
 #
 # 一、整体实验流程
