@@ -88,7 +88,7 @@ CUDA_VISIBLE_DEVICES=7 python -m synthgen.train data=standard/compas model=ctgan
 # ---------- 已训练好且含 control 的影子模型：后续实验 ----------
 # 方式一：用 pipeline 脚本（推荐，跑完后自动打印保存文件说明与路径）
 nohup python scripts/run_shadow_metrics_pipeline.py \
-  --run-dir outputs/train_adult_openml_preprocess_monotonic_train500_synth500_ctgan_2000iter_bs256_candidate100_control_20260220_082925/ \
+  --run-dir outputs//train_adult_openml_preprocess_monotonic_train1500_synth1500_ctgan_1000iter_bs256_rounds20_candidate100_control_seed46_20260221_181549/ \
   --n-jobs 32 \
   --max-targets 100 \
   --mmd-max-rows 1000 \
@@ -148,6 +148,14 @@ nohup bash scripts/run_six_shadow_metrics.sh > run_six_shadow_metrics.log 2>&1 &
 # ---------- AUC / Stability 汇总与成图（基于已跑完的 control run） ----------
 # 在 outputs/ 下扫描所有带 control 的 run，用 pair_metrics + control + mmd_component_analysis 算 AUC/adv_auc 与 stability，出表出图
 python scripts/make_auc_stability_figs.py --outputs outputs --outdir outputs/figures
+
+
+# ---------- Adult+CTGAN LOO-MIA 端到端后处理（论文结果包） ----------
+# 产出：统一总表、平衡子集、Fig1–Fig4、Table1、可选 Fig5 learned attacker、postprocess_report.txt
+# 要求 run 名称含 adult + control，且 shadow_pair_metrics 下存在 pair_metrics.csv、pair_metrics_control.csv、mmd_component_analysis.json
+python scripts/adult_ctgan_loomia_postprocess.py --outputs outputs --outdir outputs/postprocess_adult_ctgan
+# 含 Fig5（learned attacker）时：
+python scripts/adult_ctgan_loomia_postprocess.py --outputs outputs --outdir outputs/postprocess_adult_ctgan --with-fig5
 
 
 # ========== 实验流程与当前工作（第一人称简述） ==========
