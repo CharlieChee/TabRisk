@@ -94,8 +94,14 @@ nohup python scripts/run_shadow_metrics_pipeline.py \
   --mmd-max-rows 1000 \
   > run_shadow_metrics_pipeline.log 2>&1 &
 
-
-
+# 方式二：对 outputs/ 下所有目录批量执行（自动跳过已执行 + target 不足的）
+# 规则：已存在 shadow_pair_metrics/ 的跳过；shadow/ 下 target 数 < 100 的只记录不跑；其余后台执行
+# Demo（在项目根目录执行）：
+#   bash scripts/batch_run_shadow_metrics_all_outputs.sh
+# 关掉终端也继续跑：
+#   nohup bash scripts/batch_run_shadow_metrics_all_outputs.sh > batch_all_outputs_launcher.log 2>&1 &
+# target 不足的目录会记录到：logs_shadow_metrics_batch/insufficient_targets.txt
+# 每个 run 的 pipeline 日志：logs_shadow_metrics_batch/<run_dir名>.log
 
 
 # ---------- 数据保存位置（均在 run_dir/shadow_pair_metrics/ 下） ----------
