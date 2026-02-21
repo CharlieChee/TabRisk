@@ -33,7 +33,7 @@ CUDA_VISIBLE_DEVICES=7 python -m synthgen.train data=standard/compas model=ctgan
 
   nohup python -m synthgen.train \
   data=standard/adult_openml \
-  model=ctgan model.params.device=cuda \
+  model=ddpm model.params.device=cuda \
   preprocess=monotonic \
   train_rows=500 synthetic_rows=500 \
   model.params.n_iter=1000 model.params.batch_size=256 \
