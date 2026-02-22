@@ -474,7 +474,9 @@ def _shadow_worker_process(
     - 若 control_branch=True，每任务额外生成 control_in/control_out 作为严格 LOO 对照。
     """
     run_dir = Path(run_dir_str)
-    os.environ["CUDA_VISIBLE_DEVICES"] = str(gpu_id)
+    # 仅当当前进程可见多卡时才覆盖（spawn 继承多卡时设成逻辑 gpu_id）；subprocess 已传入单物理卡时不要改，否则会变成物理 0 导致用 CPU
+    if "," in os.environ.get("CUDA_VISIBLE_DEVICES", ""):
+        os.environ["CUDA_VISIBLE_DEVICES"] = str(gpu_id)
     logger.info(
         f"[worker] GPU {gpu_id}: start, jobs={len(jobs)}, N={N}, n_base={n_base}, synth_rows={synth_rows}, seed={seed}, control_branch={control_branch}"
     )
@@ -588,7 +590,8 @@ def _shadow_reuse_worker_process(
     target_k/synthetic_round_*.csv 位置，保证对外接口与原逻辑完全一致。
     """
     run_dir = Path(run_dir_str)
-    os.environ["CUDA_VISIBLE_DEVICES"] = str(gpu_id)
+    if "," in os.environ.get("CUDA_VISIBLE_DEVICES", ""):
+        os.environ["CUDA_VISIBLE_DEVICES"] = str(gpu_id)
     logger.info(
         f"[reuse-worker] GPU {gpu_id}: start, jobs={len(jobs)}, "
         f"bases={len(base_aux_indices_list)}, synth_rows={synth_rows}, seed={seed}"
