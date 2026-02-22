@@ -161,6 +161,12 @@ python scripts/build_run_level_bridge.py --outputs outputs --outdir outputs/figu
 # 若 run 在子目录（如 outputs/postprocess_adult_ddpm/），脚本会同时扫描 outputs 与 outputs/*/ 一层子目录。
 
 
+# ---------- 稳健 bridge 分析（在桥接表基础上补齐 trim95/median/p95、方向性、SNR、partial corr、敏感性、图） ----------
+# 依赖：已生成 run_level_bridge_table.csv，且各 run 下存在 shadow_pair_metrics/pair_metrics.csv（有 control 时需 pair_metrics_control.csv）
+# 产出：bridge_robust_stability_table.csv, bridge_with_control_excess.csv, partial_corr_summary.csv, sensitivity_remove_outliers.csv, figA/figA2/figB/figC/figD
+python scripts/build_bridge_robust_analysis.py --table outputs/run_level_bridge_table.csv --outdir outputs/figures
+
+
 # ---------- Adult+CTGAN LOO-MIA 端到端后处理（论文结果包） ----------
 # 产出：统一总表、平衡子集、Fig1–Fig4、Table1、可选 Fig5 learned attacker、postprocess_report.txt
 # 要求 run 名称含 adult + control，且 shadow_pair_metrics 下存在 pair_metrics.csv、pair_metrics_control.csv、mmd_component_analysis.json
