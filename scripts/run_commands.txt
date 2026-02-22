@@ -173,6 +173,18 @@ python scripts/build_bridge_robust_analysis.py --table outputs/run_level_bridge_
 python scripts/run_final_four_validations.py --robust outputs/figures/bridge_robust_stability_table.csv --control outputs/figures/bridge_with_control_excess.csv --outdir outputs/figures
 
 
+# ---------- Membership scaling 分析（adv_abs vs N, density, clf, tail, shift partial） ----------
+# 产出：run_level_adv_abs.csv, run_level_adv_abs_density.csv, run_level_adv_abs_clf.csv, run_level_tail_metrics.csv,
+#       scaling_model_summary.csv, shift_partial_summary.csv, fig_main_adv_abs_vs_N*.png, fig_density_*, fig_clf_*, fig_tail_*, fig_fraction_*
+python scripts/run_membership_scaling_analysis.py --outputs outputs --outdir outputs/figures
+# 或指定已有 run 表：python scripts/run_membership_scaling_analysis.py --table outputs/run_level_bridge_table.csv --outputs outputs --outdir outputs/figures
+
+
+# ---------- 局部攻击族稳健性测试（density 多 k + classifier 多模型） ----------
+# 产出：run_level_density_multi_k.csv, run_level_classifier_multi_model.csv, fig_density_multi_k_scaling.png, fig_classifier_multi_model_scaling.png + PART A/B/C 打印
+python scripts/run_membership_scaling_robust.py --outputs outputs --outdir outputs/figures --n_jobs 4
+
+
 # ---------- Adult+CTGAN LOO-MIA 端到端后处理（论文结果包） ----------
 # 产出：统一总表、平衡子集、Fig1–Fig4、Table1、可选 Fig5 learned attacker、postprocess_report.txt
 # 要求 run 名称含 adult + control，且 shadow_pair_metrics 下存在 pair_metrics.csv、pair_metrics_control.csv、mmd_component_analysis.json

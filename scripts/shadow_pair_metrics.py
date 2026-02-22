@@ -415,6 +415,42 @@ def _mixed_type_min_dist(
     return float(dist.min())
 
 
+def _mixed_type_distances_all(
+    target_row: pd.Series,
+    df: pd.DataFrame,
+    num_cols: Sequence[str],
+    cat_cols: Sequence[str],
+    mu: Optional[pd.Series] = None,
+    sigma: Optional[pd.Series] = None,
+) -> np.ndarray:
+    """计算 target_row 到 df 中每一行的 mixed-type 距离，返回形状 (len(df),) 的数组。"""
+    n_rows = len(df)
+    if n_rows == 0:
+        return np.array([], dtype=float)
+    if num_cols:
+        data_num = df[num_cols].astype(float)
+        if mu is None or sigma is None:
+            mu_local = data_num.mean()
+            sigma_local = data_num.std(ddof=0).replace(0.0, 1.0)
+        else:
+            mu_local = mu[num_cols]
+            sigma_local = sigma[num_cols].replace(0.0, 1.0)
+        data_num_z = ((data_num - mu_local) / sigma_local).to_numpy(dtype=float)
+        t_num = target_row[num_cols].astype(float)
+        t_num_z = ((t_num - mu_local) / sigma_local).to_numpy(dtype=float)
+        diff = data_num_z - t_num_z.reshape(1, -1)
+        d_num = np.sqrt((diff ** 2).sum(axis=1) / float(len(num_cols)))
+    else:
+        d_num = np.zeros(n_rows, dtype=float)
+    if cat_cols:
+        data_cat = df[cat_cols].astype(str).to_numpy(dtype=object)
+        t_cat = target_row[cat_cols].astype(str).to_numpy(dtype=object)
+        d_cat = (data_cat != t_cat.reshape(1, -1)).mean(axis=1).astype(float)
+    else:
+        d_cat = np.zeros(n_rows, dtype=float)
+    return (d_num + d_cat).astype(float)
+
+
 def _compute_pair_metrics_for_target(
     run_dir: Path,
     target_idx: int,
