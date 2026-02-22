@@ -167,6 +167,12 @@ python scripts/build_run_level_bridge.py --outputs outputs --outdir outputs/figu
 python scripts/build_bridge_robust_analysis.py --table outputs/run_level_bridge_table.csv --outdir outputs/figures
 
 
+# ---------- 最终四项验证（mediation / interaction / per-model / bound） ----------
+# 依赖：bridge_robust_stability_table.csv、bridge_with_control_excess.csv（可选）
+# 产出：run_level_final.csv, mediation_models_summary.csv, interaction_binned_spearman.csv, interaction_I1_summary.csv, per_model_mechanism_summary.csv, bound_proxy_summary.csv, fig_med1/med2/med3, fig_interaction_*, fig_pm_*, fig_bound_*
+python scripts/run_final_four_validations.py --robust outputs/figures/bridge_robust_stability_table.csv --control outputs/figures/bridge_with_control_excess.csv --outdir outputs/figures
+
+
 # ---------- Adult+CTGAN LOO-MIA 端到端后处理（论文结果包） ----------
 # 产出：统一总表、平衡子集、Fig1–Fig4、Table1、可选 Fig5 learned attacker、postprocess_report.txt
 # 要求 run 名称含 adult + control，且 shadow_pair_metrics 下存在 pair_metrics.csv、pair_metrics_control.csv、mmd_component_analysis.json
