@@ -150,6 +150,17 @@ nohup bash scripts/run_six_shadow_metrics.sh > run_six_shadow_metrics.log 2>&1 &
 python scripts/make_auc_stability_figs.py --outputs outputs --outdir outputs/figures
 
 
+# ---------- 桥接表与 Adv vs 稳定性 5 张图（run_level_bridge_table + 图1–5） ----------
+# 核心逻辑：Adv(AUC) 与 in/out 分布差异（s_run = mean MMD）正相关验证。
+# 过滤：仅 control run；DDPM train_size in [200,500,1000,1500] 5 seeds → 20 条；CTGAN train_size in [200,500,1000,1500,2000] rounds20 5 seeds，同配置同 seed 取较新时间戳 → 25 条。
+# 产出：run_level_bridge_table.csv（每 run 一行：model, train_size, iter, rounds, batch_size, adv_auc, s_run, r_run, paired_d, seed, run_dir）+ 5 张图。
+# Demo（在项目根目录执行）：
+python scripts/build_run_level_bridge.py --outputs outputs --outdir outputs/figures --table outputs/run_level_bridge_table.csv
+# 只出 3 张主图（不出图4 图5）：
+# python scripts/build_run_level_bridge.py --outputs outputs --outdir outputs/figures --table outputs/run_level_bridge_table.csv --no-fig4 --no-fig5
+# 若 run 在子目录（如 outputs/postprocess_adult_ddpm/），脚本会同时扫描 outputs 与 outputs/*/ 一层子目录。
+
+
 # ---------- Adult+CTGAN LOO-MIA 端到端后处理（论文结果包） ----------
 # 产出：统一总表、平衡子集、Fig1–Fig4、Table1、可选 Fig5 learned attacker、postprocess_report.txt
 # 要求 run 名称含 adult + control，且 shadow_pair_metrics 下存在 pair_metrics.csv、pair_metrics_control.csv、mmd_component_analysis.json
