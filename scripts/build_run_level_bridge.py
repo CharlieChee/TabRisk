@@ -1,15 +1,21 @@
 #!/usr/bin/env python3
 """
-桥接表与 5 张图：Adv(AUC) 与稳定性代理 s_run 的正相关验证。
+桥接表与图：攻击优势 adv_abs 与稳定性代理 s_run 的正相关验证。
+
+主指标：adv_abs = |AUC − 0.5|（等价 AUC_opt = max(AUC, 1-AUC)，adv_abs = AUC_opt − 0.5）。
+所有相关性、回归、图均以 adv_abs 为 y 轴。
 
 核心逻辑：相邻数据集（只差 1 条 target）训练出的生成分布差异越大（越不稳定）
-→ LOO-MIA 攻击优势越大。即 Adv(AUC) 与 in/out 分布差异正相关。
+→ LOO-MIA 攻击优势越大。即 adv_abs 与 in/out 分布差异正相关。
 
 稳定性定义：replace-one stability（in/out 输出分布接近）。s_run 越大 = 差异越大 = 越不稳定。
 
 交付物：
-- run_level_bridge_table.csv：每 run 一行（model, train_size, iter, rounds, batch_size, adv_auc, s_run, r_run, paired_d, seed, run_dir）
-- 至少 3 张、最好 5 张图（见下方 FIG 说明）
+- run_level_bridge_table.csv：每 run 一行（含 adv_auc, adv_abs, s_run, r_run, paired_d 等）
+- Fig1' adv_abs vs s_run；Fig4' adv_abs vs sqrt(s_run)
+- Fig1-ctgan-only / Fig1-ddpm-only（去混杂）
+- ddpm_within_N_spearman.csv：DDPM 各 N 的 Within-N Spearman ρ
+- DDPM N=1000 sanity：pair-level MMD 分布图 + top-10 outlier CSV
 
 过滤规则：
 - 仅 control_branch=true 的 run（目录名含 control）
@@ -226,14 +232,18 @@ def collect_run_row(run_dir: Path, metrics_dir: Path) -> Optional[Dict[str, Any]
 
     s_run, s_run_std, r_run, r_run_std = stability_from_pair_metrics(pair_path)
     adv_auc, adv_ci_low, adv_ci_high, auc_err = compute_adv_auc(pair_path, pair_control_path)
+    # adv_abs = |AUC - 0.5| = AUC_opt - 0.5, 主指标
+    adv_abs = abs(adv_auc) if adv_auc is not None else np.nan
     paired_d = paired_d_from_control_comparison(cc_path)
     if paired_d is None and cc_path.exists():
         cc = load_json_safe(cc_path)
         if cc:
             flat = _flatten_cc(cc)
-            paired_d = flat.get("cc_cohens_d_paired", np.nan)
-            if paired_d is not np.nan:
+            paired_d = flat.get("cc_cohens_d_paired")
+            if paired_d is not None and isinstance(paired_d, (int, float)) and not (isinstance(paired_d, float) and np.isnan(paired_d)):
                 paired_d = float(paired_d)
+            else:
+                paired_d = None
 
     row = {
         "model": parsed["model"],
@@ -246,6 +256,7 @@ def collect_run_row(run_dir: Path, metrics_dir: Path) -> Optional[Dict[str, Any]
         "run_dir_name": run_dir.name,
         "run_dir_path": str(run_dir.resolve()),
         "adv_auc": adv_auc if adv_auc is not None else np.nan,
+        "adv_abs": adv_abs,
         "adv_auc_ci95_low": adv_ci_low if adv_ci_low is not None else np.nan,
         "adv_auc_ci95_high": adv_ci_high if adv_ci_high is not None else np.nan,
         "s_run": s_run if s_run is not None else np.nan,
@@ -322,34 +333,114 @@ def filter_and_dedupe(df: pd.DataFrame) -> pd.DataFrame:
     return out.sort_values(["model", "train_size", "seed"]).reset_index(drop=True)
 
 
-def fig1_adv_vs_stability(df: pd.DataFrame, out_path: Path) -> None:
-    """图1：Adv(AUC) vs s_run，散点 + 线性回归 + Pearson/Spearman，按 model 或 train_size 上色。"""
-    df = df.dropna(subset=["s_run", "adv_auc"]).copy()
+def _scatter_regression(
+    df: pd.DataFrame,
+    x_col: str,
+    y_col: str,
+    ax: plt.Axes,
+    color_by_model: bool = True,
+    show_fit: bool = True,
+) -> Tuple[Optional[float], Optional[float], Optional[float], Optional[float]]:
+    """散点 + 按 model 标色；可选线性拟合。返回 (r_pearson, p_pearson, rho_spearman, p_spearman)。"""
+    df = df.dropna(subset=[x_col, y_col])
+    if df.empty or len(df) < 2:
+        return None, None, None, None
+    x = df[x_col].to_numpy(dtype=float)
+    y = df[y_col].to_numpy(dtype=float)
+    if color_by_model and "model" in df.columns:
+        models = sorted(df["model"].unique())
+        colors = plt.cm.tab10(np.linspace(0, 1, max(len(models), 1)))
+        for i, mod in enumerate(models):
+            sub = df[df["model"] == mod]
+            ax.scatter(sub[x_col], sub[y_col], c=[colors[i]], s=50, alpha=0.8, label=mod, edgecolors="k", linewidths=0.5)
+    else:
+        ax.scatter(df[x_col], df[y_col], s=50, alpha=0.8, edgecolors="k", linewidths=0.5)
+    r_pearson, p_pearson, rho, p_spearman = None, None, None, None
+    if x.size > 2 and np.isfinite(x).all() and np.isfinite(y).all() and show_fit:
+        slope, intercept, r_pearson, p_pearson, _ = stats.linregress(x, y)
+        rho, p_spearman = stats.spearmanr(x, y, nan_policy="omit")
+        if not np.isfinite(rho):
+            rho, p_spearman = np.nan, np.nan
+        xx = np.linspace(x.min(), x.max(), 100)
+        ax.plot(xx, slope * xx + intercept, "k-", linewidth=1.5, label="linear fit")
+    if color_by_model and "model" in df.columns:
+        ax.legend()
+    return r_pearson, p_pearson, rho, p_spearman
+
+
+def fig1_prime_adv_abs_vs_s_run(df: pd.DataFrame, out_path: Path) -> None:
+    """Fig1'：adv_abs vs s_run，散点 + 回归 + Pearson/Spearman，按 ctgan/ddpm 标色。"""
+    df = df.dropna(subset=["s_run", "adv_abs"]).copy()
     if df.empty or len(df) < 2:
         return
     fig, ax = plt.subplots(figsize=(7, 5))
-    models = sorted(df["model"].unique())
-    colors = plt.cm.tab10(np.linspace(0, 1, max(len(models), 1)))
-    for i, mod in enumerate(models):
-        sub = df[df["model"] == mod]
-        ax.scatter(sub["s_run"], sub["adv_auc"], c=[colors[i]], s=50, alpha=0.8, label=mod, edgecolors="k", linewidths=0.5)
-    x = df["s_run"].to_numpy(dtype=float)
-    y = df["adv_auc"].to_numpy(dtype=float)
-    if x.size > 2 and np.isfinite(x).all() and np.isfinite(y).all():
-        slope, intercept, r_pearson, p_pearson, _ = stats.linregress(x, y)
-        rho, p_spearman = stats.spearmanr(x, y)
-        xx = np.linspace(x.min(), x.max(), 100)
-        ax.plot(xx, slope * xx + intercept, "k-", linewidth=1.5, label="linear fit")
-        ax.set_title(
-            f"Adv(AUC) vs Stability proxy s_run (MMD)\n"
-            f"Pearson r = {r_pearson:.3f} (p = {p_pearson:.4f}), Spearman ρ = {rho:.3f} (p = {p_spearman:.4f})"
-        )
-    else:
-        ax.set_title("Adv(AUC) vs Stability proxy s_run (MMD)")
-    ax.axhline(0, color="gray", linestyle="--", linewidth=1)
+    r_pearson, p_pearson, rho, p_spearman = _scatter_regression(df, "s_run", "adv_abs", ax, color_by_model=True, show_fit=True)
+    title_r = f"Pearson r = {r_pearson:.3f} (p = {p_pearson:.4f})" if r_pearson is not None else ""
+    title_s = f"Spearman ρ = {rho:.3f} (p = {p_spearman:.4f})" if rho is not None and np.isfinite(rho) else "Spearman ρ = N/A"
+    ax.set_title(f"adv_abs vs s_run (MMD)\n{title_r}, {title_s}")
     ax.set_xlabel("s_run (mean MMD in/out)")
-    ax.set_ylabel("Adv(AUC) = AUC − 0.5")
-    ax.legend()
+    ax.set_ylabel("adv_abs = |AUC − 0.5|")
+    ax.grid(True, alpha=0.3)
+    plt.tight_layout()
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+    fig.savefig(out_path, dpi=200)
+    plt.close(fig)
+
+
+def fig4_prime_adv_abs_vs_sqrt_s_run(df: pd.DataFrame, out_path: Path) -> None:
+    """Fig4'：adv_abs vs sqrt(s_run)，散点 + 回归 + Pearson/Spearman，按 model 标色。"""
+    df = df.dropna(subset=["s_run", "adv_abs"]).copy()
+    if df.empty or (df["s_run"] <= 0).all():
+        return
+    df = df[df["s_run"] > 0].copy()
+    if df.empty:
+        return
+    df = df.assign(sqrt_s=np.sqrt(df["s_run"]))
+    fig, ax = plt.subplots(figsize=(7, 5))
+    r_pearson, p_pearson, rho, p_spearman = _scatter_regression(df, "sqrt_s", "adv_abs", ax, color_by_model=True, show_fit=True)
+    title_r = f"Pearson r = {r_pearson:.3f} (p = {p_pearson:.4f})" if r_pearson is not None else ""
+    title_s = f"Spearman ρ = {rho:.3f} (p = {p_spearman:.4f})" if rho is not None and np.isfinite(rho) else "Spearman ρ = N/A"
+    ax.set_title(f"adv_abs vs sqrt(s_run)\n{title_r}, {title_s}")
+    ax.set_xlabel("sqrt(s_run)")
+    ax.set_ylabel("adv_abs = |AUC − 0.5|")
+    ax.grid(True, alpha=0.3)
+    plt.tight_layout()
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+    fig.savefig(out_path, dpi=200)
+    plt.close(fig)
+
+
+def fig1_ctgan_only(df: pd.DataFrame, out_path: Path) -> None:
+    """Fig1-ctgan-only：仅 CTGAN，adv_abs vs s_run。"""
+    df = df[(df["model"] == "ctgan")].dropna(subset=["s_run", "adv_abs"]).copy()
+    if df.empty or len(df) < 2:
+        return
+    fig, ax = plt.subplots(figsize=(7, 5))
+    r_pearson, p_pearson, rho, p_spearman = _scatter_regression(df, "s_run", "adv_abs", ax, color_by_model=False, show_fit=True)
+    title_r = f"Pearson r = {r_pearson:.3f} (p = {p_pearson:.4f})" if r_pearson is not None else ""
+    title_s = f"Spearman ρ = {rho:.3f} (p = {p_spearman:.4f})" if rho is not None and np.isfinite(rho) else "Spearman ρ = N/A"
+    ax.set_title(f"adv_abs vs s_run (CTGAN only)\n{title_r}, {title_s}")
+    ax.set_xlabel("s_run")
+    ax.set_ylabel("adv_abs")
+    ax.grid(True, alpha=0.3)
+    plt.tight_layout()
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+    fig.savefig(out_path, dpi=200)
+    plt.close(fig)
+
+
+def fig1_ddpm_only(df: pd.DataFrame, out_path: Path) -> None:
+    """Fig1-ddpm-only：仅 DDPM，adv_abs vs s_run。"""
+    df = df[(df["model"] == "ddpm")].dropna(subset=["s_run", "adv_abs"]).copy()
+    if df.empty or len(df) < 2:
+        return
+    fig, ax = plt.subplots(figsize=(7, 5))
+    r_pearson, p_pearson, rho, p_spearman = _scatter_regression(df, "s_run", "adv_abs", ax, color_by_model=False, show_fit=True)
+    title_r = f"Pearson r = {r_pearson:.3f} (p = {p_pearson:.4f})" if r_pearson is not None else ""
+    title_s = f"Spearman ρ = {rho:.3f} (p = {p_spearman:.4f})" if rho is not None and np.isfinite(rho) else "Spearman ρ = N/A"
+    ax.set_title(f"adv_abs vs s_run (DDPM only)\n{title_r}, {title_s}")
+    ax.set_xlabel("s_run")
+    ax.set_ylabel("adv_abs")
     ax.grid(True, alpha=0.3)
     plt.tight_layout()
     out_path.parent.mkdir(parents=True, exist_ok=True)
@@ -387,29 +478,29 @@ def fig2_stability_vs_train_size(df: pd.DataFrame, out_path: Path) -> None:
     plt.close(fig)
 
 
-def fig3_adv_vs_train_size(df: pd.DataFrame, out_path: Path) -> None:
-    """图3：train_size N vs Adv(AUC)，与图2 同一套 run。"""
-    df = df.dropna(subset=["train_size", "adv_auc"]).copy()
+def fig3_adv_abs_vs_train_size(df: pd.DataFrame, out_path: Path) -> None:
+    """图3：train_size N vs adv_abs，与图2 同一套 run。"""
+    df = df.dropna(subset=["train_size", "adv_abs"]).copy()
     if df.empty:
         return
     fig, ax = plt.subplots(figsize=(7, 5))
     for model in sorted(df["model"].unique()):
         sub = df[df["model"] == model]
         agg = sub.groupby("train_size", as_index=False).agg(
-            mean_adv=("adv_auc", "mean"),
-            std_adv=("adv_auc", "std"),
-            count=("adv_auc", "count"),
+            mean_adv=("adv_abs", "mean"),
+            std_adv=("adv_abs", "std"),
+            count=("adv_abs", "count"),
         )
         x = agg["train_size"].values
         y = agg["mean_adv"].values
         err = agg["std_adv"].fillna(0).values
         has_err = agg["count"].values > 1
         ax.errorbar(x, y, yerr=np.where(has_err, err, 0), marker="o", capsize=4, label=model)
-        ax.scatter(sub["train_size"], sub["adv_auc"], alpha=0.5, s=30)
+        ax.scatter(sub["train_size"], sub["adv_abs"], alpha=0.5, s=30)
     ax.axhline(0, color="gray", linestyle="--", linewidth=1)
     ax.set_xlabel("Train size N")
-    ax.set_ylabel("Adv(AUC)")
-    ax.set_title("Adv(AUC) vs Train size N (same runs as Fig 2)")
+    ax.set_ylabel("adv_abs = |AUC − 0.5|")
+    ax.set_title("adv_abs vs Train size N (same runs as Fig 2)")
     ax.legend()
     ax.grid(True, alpha=0.3)
     plt.tight_layout()
@@ -449,37 +540,84 @@ def fig4_stability_vs_iter(df: pd.DataFrame, out_path: Path) -> None:
     plt.close(fig)
 
 
-def fig5_adv_vs_sqrt_stability(df: pd.DataFrame, out_path: Path) -> None:
-    """图5（可选）：Adv(AUC) vs sqrt(s_run)（K 常数时等价），上界/单调证据。"""
-    df = df.dropna(subset=["s_run", "adv_auc"]).copy()
-    if df.empty or (df["s_run"] <= 0).all():
+def fig5_adv_abs_vs_sqrt_stability(df: pd.DataFrame, out_path: Path) -> None:
+    """图5（可选）：adv_abs vs sqrt(s_run)，与 Fig4' 一致，保留兼容。"""
+    fig4_prime_adv_abs_vs_sqrt_s_run(df, out_path)
+
+
+def write_ddpm_within_N_spearman_table(df: pd.DataFrame, out_path: Path) -> None:
+    """DDPM 每个 N 单独算 adv_abs vs s_run 的 Spearman ρ，输出表。"""
+    ddpm = df[(df["model"] == "ddpm")].dropna(subset=["train_size", "adv_abs", "s_run"])
+    if ddpm.empty:
         return
-    df = df[df["s_run"] > 0].copy()
-    if df.empty:
-        return
-    df = df.assign(sqrt_s=np.sqrt(df["s_run"]))
-    fig, ax = plt.subplots(figsize=(7, 5))
-    for model in sorted(df["model"].unique()):
-        sub = df[df["model"] == model]
-        ax.scatter(sub["sqrt_s"], sub["adv_auc"], label=model, alpha=0.8, s=50)
-    x = df["sqrt_s"].to_numpy(dtype=float)
-    y = df["adv_auc"].to_numpy(dtype=float)
-    if x.size > 2 and np.isfinite(x).all() and np.isfinite(y).all():
-        slope, intercept, r, p, _ = stats.linregress(x, y)
-        xx = np.linspace(x.min(), x.max(), 100)
-        ax.plot(xx, slope * xx + intercept, "k-", linewidth=1.5, label="linear fit")
-        ax.set_title(f"Adv(AUC) vs sqrt(s_run) (bound proxy)\nPearson r = {r:.3f}, p = {p:.4f}")
-    else:
-        ax.set_title("Adv(AUC) vs sqrt(s_run)")
-    ax.axhline(0, color="gray", linestyle="--", linewidth=1)
-    ax.set_xlabel("sqrt(s_run)")
-    ax.set_ylabel("Adv(AUC)")
-    ax.legend()
-    ax.grid(True, alpha=0.3)
-    plt.tight_layout()
+    rows = []
+    for n in sorted(ddpm["train_size"].unique()):
+        sub = ddpm[ddpm["train_size"] == n]
+        if len(sub) < 2:
+            rows.append({"train_size": int(n), "n_runs": len(sub), "spearman_rho": np.nan, "spearman_p": np.nan})
+            continue
+        x = sub["s_run"].to_numpy(dtype=float)
+        y = sub["adv_abs"].to_numpy(dtype=float)
+        rho, p = stats.spearmanr(x, y, nan_policy="omit")
+        if not np.isfinite(rho):
+            rho, p = np.nan, np.nan
+        rows.append({"train_size": int(n), "n_runs": len(sub), "spearman_rho": float(rho), "spearman_p": float(p)})
+    out_df = pd.DataFrame(rows)
     out_path.parent.mkdir(parents=True, exist_ok=True)
-    fig.savefig(out_path, dpi=200)
+    out_df.to_csv(out_path, index=False, float_format="%.6f")
+    print(f"Within-N Spearman 表: {out_path}")
+
+
+def run_ddpm_N1000_sanity(bridge_df: pd.DataFrame, outdir: Path) -> None:
+    """DDPM N=1000：pair-level MMD 分布（箱线+直方）+ top-10 outlier pairs (run, target_idx, round_k, mmd)。"""
+    ddpm_1000 = bridge_df[(bridge_df["model"] == "ddpm") & (bridge_df["train_size"] == 1000)]
+    if ddpm_1000.empty:
+        print("无 DDPM N=1000 run，跳过 sanity")
+        return
+    pair_rows: List[Dict[str, Any]] = []
+    for _, row in ddpm_1000.iterrows():
+        run_path = Path(row["run_dir_path"])
+        pair_path = run_path / "shadow_pair_metrics" / "pair_metrics.csv"
+        if not pair_path.exists():
+            continue
+        df = pd.read_csv(pair_path)
+        mmd_col_use = "mmd_mixed" if "mmd_mixed" in df.columns else ("mmd_numeric" if "mmd_numeric" in df.columns else None)
+        if mmd_col_use is None:
+            continue
+        for _, r in df.iterrows():
+            pair_rows.append({
+                "run": row["run_dir_name"],
+                "target_idx": r.get("target_idx", np.nan),
+                "round_k": r.get("round", np.nan),
+                "mmd": float(r[mmd_col_use]),
+            })
+    if not pair_rows:
+        print("DDPM N=1000 无 pair-level 数据，跳过 sanity")
+        return
+    pair_df = pd.DataFrame(pair_rows)
+    pair_df = pair_df.dropna(subset=["mmd"])
+    if pair_df.empty:
+        return
+    # 直方 + 箱线
+    fig, axes = plt.subplots(1, 2, figsize=(10, 4))
+    axes[0].hist(pair_df["mmd"], bins=40, color="steelblue", edgecolor="black", alpha=0.7)
+    axes[0].set_xlabel("MMD (pair-level)")
+    axes[0].set_ylabel("count")
+    axes[0].set_title("DDPM N=1000 pair-level MMD distribution (hist)")
+    axes[1].boxplot(pair_df["mmd"], vert=True)
+    axes[1].set_ylabel("MMD")
+    axes[1].set_title("DDPM N=1000 pair-level MMD (boxplot)")
+    plt.tight_layout()
+    fig_path = outdir / "ddpm_N1000_pair_mmd_distribution.png"
+    fig_path.parent.mkdir(parents=True, exist_ok=True)
+    fig.savefig(fig_path, dpi=200)
     plt.close(fig)
+    print(f"DDPM N=1000 MMD 分布图: {fig_path}")
+    # top-10 outliers by MMD (largest)
+    top10 = pair_df.nlargest(10, "mmd")[["run", "target_idx", "round_k", "mmd"]].reset_index(drop=True)
+    top10_path = outdir / "ddpm_N1000_top10_mmd_outliers.csv"
+    top10.to_csv(top10_path, index=False, float_format="%.6f")
+    print(f"DDPM N=1000 top-10 MMD outliers: {top10_path}")
 
 
 def main() -> None:
@@ -520,23 +658,41 @@ def main() -> None:
     print(f"桥接表已写入: {args.table} (rows={len(bridge_df)})")
 
     args.outdir.mkdir(parents=True, exist_ok=True)
-    fig1_path = args.outdir / "fig_bridge_adv_vs_stability.png"
+    # 核心图：adv_abs 为主指标
+    fig1_prime_path = args.outdir / "fig1_prime_adv_abs_vs_s_run.png"
+    fig4_prime_path = args.outdir / "fig4_prime_adv_abs_vs_sqrt_s_run.png"
+    fig1_ctgan_path = args.outdir / "fig1_ctgan_only_adv_abs_vs_s_run.png"
+    fig1_ddpm_path = args.outdir / "fig1_ddpm_only_adv_abs_vs_s_run.png"
     fig2_path = args.outdir / "fig_stability_vs_train_size.png"
-    fig3_path = args.outdir / "fig_adv_vs_train_size.png"
-    fig4_path = args.outdir / "fig_stability_vs_iter.png"
-    fig5_path = args.outdir / "fig_adv_vs_sqrt_stability.png"
+    fig3_path = args.outdir / "fig_adv_abs_vs_train_size.png"
+    fig4_iter_path = args.outdir / "fig_stability_vs_iter.png"
+    fig5_path = args.outdir / "fig_adv_abs_vs_sqrt_stability.png"
 
-    fig1_adv_vs_stability(bridge_df, fig1_path)
+    fig1_prime_adv_abs_vs_s_run(bridge_df, fig1_prime_path)
+    fig4_prime_adv_abs_vs_sqrt_s_run(bridge_df, fig4_prime_path)
+    fig1_ctgan_only(bridge_df, fig1_ctgan_path)
+    fig1_ddpm_only(bridge_df, fig1_ddpm_path)
     fig2_stability_vs_train_size(bridge_df, fig2_path)
-    fig3_adv_vs_train_size(bridge_df, fig3_path)
-    print(f"图1: {fig1_path}")
+    fig3_adv_abs_vs_train_size(bridge_df, fig3_path)
+    print(f"Fig1': {fig1_prime_path}")
+    print(f"Fig4': {fig4_prime_path}")
+    print(f"Fig1-ctgan-only: {fig1_ctgan_path}")
+    print(f"Fig1-ddpm-only: {fig1_ddpm_path}")
     print(f"图2: {fig2_path}")
     print(f"图3: {fig3_path}")
+
+    # Within-N Spearman 表（DDPM）
+    within_n_path = args.outdir / "ddpm_within_N_spearman.csv"
+    write_ddpm_within_N_spearman_table(bridge_df, within_n_path)
+
+    # DDPM N=1000 sanity：pair-level MMD 分布 + top-10 outliers
+    run_ddpm_N1000_sanity(bridge_df, args.outdir)
+
     if not args.no_fig4:
-        fig4_stability_vs_iter(bridge_df, fig4_path)
-        print(f"图4: {fig4_path}")
+        fig4_stability_vs_iter(bridge_df, fig4_iter_path)
+        print(f"图4(iter): {fig4_iter_path}")
     if not args.no_fig5:
-        fig5_adv_vs_sqrt_stability(bridge_df, fig5_path)
+        fig5_adv_abs_vs_sqrt_stability(bridge_df, fig5_path)
         print(f"图5: {fig5_path}")
 
 
