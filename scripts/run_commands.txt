@@ -160,6 +160,13 @@ python scripts/adult_ctgan_loomia_postprocess.py --outputs outputs --outdir outp
 python scripts/adult_ctgan_loomia_postprocess.py --outputs outputs --outdir outputs/postprocess_adult_ctgan --with-fig5 --n-jobs 8
 
 
+# ---------- Adult+DDPM LOO-MIA 端到端后处理（与 CTGAN 同逻辑，train_rows 仅 200/500/1000/1500，5 seeds，图注明 DDPM, Adult） ----------
+# 要求 run 名称含 adult + control + ddpm（或 tabddpm），shadow_pair_metrics 完整。图保存到 outputs/postprocess_adult_ddpm/figures/，标题带 "DDPM, Adult"
+python scripts/adult_ddpm_loomia_postprocess.py --outputs outputs --outdir outputs/postprocess_adult_ddpm
+# 含 Fig5 learned attacker、多进程：
+# python scripts/adult_ddpm_loomia_postprocess.py --outputs outputs --outdir outputs/postprocess_adult_ddpm --with-fig5 --n-jobs 8
+
+
 # ---------- 统计分析（锁定数据 + 显著性检验 + 偏相关 + 稳健回归 + learned 检验） ----------
 # 依赖：先跑完上面后处理，得到 adult_ctgan_run_summary.csv
 # 产出：scaling/rounds/iter_balanced.csv、dropped_runs.csv、table1–3 检验表、table4 偏相关、table5 稳健回归、table6–7 learned 检验、fig7–fig10
