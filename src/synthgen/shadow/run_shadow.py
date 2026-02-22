@@ -19,6 +19,9 @@ import multiprocessing
 import os
 import random
 import shutil
+import subprocess
+import sys
+import tempfile
 from concurrent.futures import ProcessPoolExecutor, as_completed
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
@@ -33,6 +36,39 @@ from synthgen.data.schema import Schema
 from synthgen.models.base import BaseModel
 from synthgen.preprocess import get_preprocessor
 from synthgen.utils.shadow_data import SHADOW_MEMBER_COL
+
+
+def _physical_gpu_id(logical_gpu_id: int) -> str:
+    """逻辑 GPU 号 -> 物理 GPU 号。父进程设了 CUDA_VISIBLE_DEVICES=4,5,6,7 时，逻辑 0->4, 1->5... 确保子进程用物理卡。"""
+    cuda_vis = os.environ.get("CUDA_VISIBLE_DEVICES", "").strip()
+    if cuda_vis:
+        physical = [x.strip() for x in cuda_vis.split(",") if x.strip()]
+        if logical_gpu_id < len(physical):
+            return physical[logical_gpu_id]
+    return str(logical_gpu_id)
+
+
+def _start_shadow_worker_subprocess(
+    target_name: str, args: Tuple[Any, ...], logical_gpu_id: int
+) -> Tuple[subprocess.Popen, str]:
+    """用 subprocess 启动 worker，env 里显式设 CUDA_VISIBLE_DEVICES=物理卡号，避免 spawn 子进程未继承导致跑在 0,1,2,3。返回 (proc, tmp_path)。"""
+    import pickle
+    physical = _physical_gpu_id(logical_gpu_id)
+    env = dict(os.environ)
+    env["CUDA_VISIBLE_DEVICES"] = physical
+    fd, tmp_path = tempfile.mkstemp(suffix=".pkl")
+    os.close(fd)
+    with open(tmp_path, "wb") as f:
+        pickle.dump((target_name, args), f)
+    cmd = [
+        sys.executable,
+        "-c",
+        "import pickle,sys; d=pickle.load(open(sys.argv[1],'rb')); name,args=d; "
+        "from synthgen.shadow.run_shadow import _shadow_worker_process, _shadow_reuse_worker_process; "
+        "(_shadow_worker_process if name=='worker' else _shadow_reuse_worker_process)(*args)",
+        tmp_path,
+    ]
+    return subprocess.Popen(cmd, env=env), tmp_path
 
 
 def _set_rng_seed(seed: int) -> None:
@@ -794,26 +830,28 @@ def _run_shadow_generation_worker(
         logger.info("Shadow(worker)：无待执行的任务，直接返回")
         return
 
-    ctx = multiprocessing.get_context("spawn")
-    processes: List[multiprocessing.Process] = []
+    # 用 subprocess 启动 worker 并显式传入 CUDA_VISIBLE_DEVICES=物理卡号，避免 spawn 子进程未继承 env 跑到物理 0,1,2,3
+    procs: List[Tuple[subprocess.Popen, str]] = []
     for (gpu, slot_idx), jobs in jobs_per_slot.items():
         if not jobs:
             continue
-        p = ctx.Process(
-            target=_shadow_worker_process,
-            args=(run_dir_str, int(gpu), jobs, N, n_base, synth_rows, seed, control_branch),
+        proc, tmp_path = _start_shadow_worker_subprocess(
+            "worker",
+            (run_dir_str, int(gpu), jobs, N, n_base, synth_rows, seed, control_branch),
+            int(gpu),
         )
-        p.start()
-        processes.append(p)
+        procs.append((proc, tmp_path))
         logger.info(
-            f"Shadow(worker)：已启动 worker 进程 pid={p.pid} 绑定 GPU {gpu} 槽位 {slot_idx}，jobs={len(jobs)}"
+            f"Shadow(worker)：已启动 worker 进程 pid={proc.pid} 绑定物理 GPU {_physical_gpu_id(gpu)} 槽位 {slot_idx}，jobs={len(jobs)}"
         )
-
-    # 等待所有 worker 完成
-    for p in processes:
-        p.join()
-        if p.exitcode != 0:
-            logger.warning(f"Shadow(worker)：worker 进程 pid={p.pid} 非零退出码 {p.exitcode}")
+    for proc, tmp_path in procs:
+        proc.wait()
+        if proc.returncode != 0:
+            logger.warning(f"Shadow(worker)：worker 进程 pid={proc.pid} 非零退出码 {proc.returncode}")
+        try:
+            os.unlink(tmp_path)
+        except OSError:
+            pass
 
     logger.info(f"Shadow(worker) 完成: {shadow_dir}")
 
@@ -1183,25 +1221,27 @@ def _run_shadow_generation_reuse(
         logger.info("Shadow(reuse)：无待执行的训练任务，直接返回")
         return
 
-    ctx = multiprocessing.get_context("spawn")
-    processes: List[multiprocessing.Process] = []
+    procs_reuse: List[Tuple[subprocess.Popen, str]] = []
     for (gpu, slot_idx), jobs in jobs_per_slot.items():
         if not jobs:
             continue
-        p = ctx.Process(
-            target=_shadow_reuse_worker_process,
-            args=(run_dir_str, int(gpu), jobs, base_aux_indices_list, synth_rows, seed),
+        proc, tmp_path = _start_shadow_worker_subprocess(
+            "reuse",
+            (run_dir_str, int(gpu), jobs, base_aux_indices_list, synth_rows, seed),
+            int(gpu),
         )
-        p.start()
-        processes.append(p)
+        procs_reuse.append((proc, tmp_path))
         logger.info(
-            f"Shadow(reuse)：已启动 worker 进程 pid={p.pid} 绑定 GPU {gpu} 槽位 {slot_idx}，jobs={len(jobs)}"
+            f"Shadow(reuse)：已启动 worker 进程 pid={proc.pid} 绑定物理 GPU {_physical_gpu_id(gpu)} 槽位 {slot_idx}，jobs={len(jobs)}"
         )
-
-    for p in processes:
-        p.join()
-        if p.exitcode != 0:
-            logger.warning(f"Shadow(reuse)：worker 进程 pid={p.pid} 非零退出码 {p.exitcode}")
+    for proc, tmp_path in procs_reuse:
+        proc.wait()
+        if proc.returncode != 0:
+            logger.warning(f"Shadow(reuse)：worker 进程 pid={proc.pid} 非零退出码 {proc.returncode}")
+        try:
+            os.unlink(tmp_path)
+        except OSError:
+            pass
 
     # 5) 将唯一数据集结果复制到各 target_k/synthetic_round_*.csv
     reuse_dir = shadow_dir / "_reuse"
