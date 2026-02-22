@@ -1,7 +1,9 @@
 #!/usr/bin/env bash
-# DDPM shadow：仅 train_rows=2000，5 seeds，只用 GPU 4,5,6,7
+# DDPM shadow：仅 train_rows=2000，5 seeds，只用物理 GPU 4,5,6,7
 #
-# 配置：与 run_ddpm_shadow_5seeds.sh 一致，仅 train_rows=2000，shadow.gpu_ids=[4,5,6,7]
+# 通过 CUDA_VISIBLE_DEVICES=4,5,6,7 限制进程只看到这 4 张卡（进程内编号为 0,1,2,3），
+# 再传 shadow.gpu_ids=[0,1,2,3] 让 shadow worker 用满这 4 张。避免仅改 gpu_ids 时
+# Hydra 解析成字符串导致仍用默认 0,1,2,3。
 #
 # 用法：
 #   nohup bash scripts/run_ddpm_shadow_2000_4gpu.sh > run_ddpm_shadow_2000_4gpu.log 2>&1 &
@@ -11,6 +13,9 @@ set -e
 cd "$(dirname "$0")/.."
 LOG_DIR="${LOG_DIR:-logs_ddpm_shadow_2000_4gpu}"
 mkdir -p "$LOG_DIR"
+
+# 仅让当前进程及其子进程看到物理 GPU 4,5,6,7（进程内为 0,1,2,3）
+export CUDA_VISIBLE_DEVICES=4,5,6,7
 
 SEEDS=(42 43 44 45 46)
 TRAIN_ROWS=2000
@@ -24,7 +29,7 @@ run_one() {
     return 0
   fi
   local log_file="$LOG_DIR/train${TRAIN_ROWS}_bs${BATCH_SIZE}_seed${seed}.log"
-  echo "[$(date '+%Y-%m-%d %H:%M:%S')] Start: train_rows=$TRAIN_ROWS seed=$seed -> $log_file"
+  echo "[$(date '+%Y-%m-%d %H:%M:%S')] Start: train_rows=$TRAIN_ROWS seed=$seed (CUDA_VISIBLE_DEVICES=$CUDA_VISIBLE_DEVICES) -> $log_file"
   python -m synthgen.train \
     data=standard/adult_openml \
     model=ddpm model.params.device=cuda \
@@ -35,7 +40,7 @@ run_one() {
     shadow.num_shadow_rounds=20 shadow.max_targets=100 shadow.random_seed="$seed" \
     shadow.engine=worker \
     shadow.control_branch=true \
-    shadow.gpu_ids="[4,5,6,7]" \
+    'shadow.gpu_ids=[0,1,2,3]' \
     shadow.worker_concurrency_per_gpu=4 \
     shadow.reuse_mode=true \
     shadow.reuse_num_bases=5 \
