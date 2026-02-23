@@ -353,6 +353,60 @@ def plot_auc_vs_train_size(agg: pd.DataFrame, out_path: Path) -> None:
     print(f"Figure saved: {out_path}")
 
 
+# 四种方法 × 两种模型：区分度高的配色（方法用颜色，模型用线型+标记）
+METHOD_COLORS = {
+    "auc_naive_nn": "#2E86AB",    # 钢蓝
+    "auc_delta": "#E94F37",       # 朱红
+    "auc_density": "#44AF69",    # 青绿
+    "auc_learned": "#7B2D8E",    # 紫
+}
+METHOD_LABELS_SHORT = {
+    "auc_naive_nn": "Naive NN",
+    "auc_delta": "Delta",
+    "auc_density": "Density",
+    "auc_learned": "Learned",
+}
+
+
+def plot_auc_vs_train_size_combined(agg: pd.DataFrame, out_path: Path) -> None:
+    """所有 8 条线（4 方法 × 2 模型）画在同一张图里，配色清晰、有区分度。"""
+    methods = ["auc_naive_nn", "auc_delta", "auc_density", "auc_learned"]
+    fig, ax = plt.subplots(figsize=(9, 5.5))
+    # 模型区分：CTGAN 实线+圆点，DDPM 虚线+方点
+    model_style = {"ctgan": ("-", "o", 6), "ddpm": ("--", "s", 5)}
+    for method in methods:
+        color = METHOD_COLORS.get(method, "#333333")
+        mlabel = METHOD_LABELS_SHORT.get(method, method)
+        for model in sorted(agg["model"].unique()):
+            sub = agg[agg["model"] == model].sort_values("train_size")
+            if sub.empty:
+                continue
+            ls, marker, ms = model_style.get(model, ("-", "o", 5))
+            std_col = f"{method}_std"
+            x = sub["train_size"].to_numpy()
+            y = sub[method].to_numpy()
+            yerr = sub[std_col].to_numpy() if std_col in sub.columns else None
+            if yerr is not None:
+                yerr = np.where(np.isfinite(yerr), yerr, 0)
+            label = f"{mlabel} ({model.upper()})"
+            ax.errorbar(
+                x, y, yerr=yerr, linestyle=ls, marker=marker, markersize=ms,
+                color=color, capsize=2.5, capthick=1, label=label,
+            )
+    ax.set_xlabel("Train size (N)", fontsize=11)
+    ax.set_ylabel("AUC", fontsize=11)
+    ax.set_ylim(0.48, 1.0)
+    ax.axhline(0.5, color="gray", linestyle=":", linewidth=1)
+    ax.grid(True, alpha=0.35, linestyle="-")
+    ax.legend(loc="upper right", fontsize=9, ncol=2, framealpha=0.95)
+    ax.set_title("AUC vs Train size (N)\n(rounds=20 shadow models per target, ≥5 seeds)", fontsize=11)
+    fig.tight_layout()
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+    fig.savefig(out_path, dpi=150, bbox_inches="tight")
+    plt.close(fig)
+    print(f"Figure saved: {out_path}")
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(
         description="四种 MIA 方法 (naive_nn, delta, density, learned) 成功率及 AUC 随 train size (N) 变化，rounds=20 且 ≥5 seeds"
@@ -390,6 +444,7 @@ def main() -> int:
     print(f"Summary written: {summary_path}")
 
     plot_auc_vs_train_size(agg, args.outdir / "auc_vs_train_size_four_methods.png")
+    plot_auc_vs_train_size_combined(agg, args.outdir / "auc_vs_train_size_combined.png")
 
     df.to_csv(args.outdir / "per_run_aucs.csv", index=False)
     agg.to_csv(args.outdir / "auc_vs_train_size_aggregated.csv", index=False)
