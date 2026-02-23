@@ -407,14 +407,74 @@ def plot_auc_vs_train_size_combined(agg: pd.DataFrame, out_path: Path) -> None:
     print(f"Figure saved: {out_path}")
 
 
+def load_agg_from_saved(data_dir: Path) -> Tuple[Optional[pd.DataFrame], Optional[pd.DataFrame]]:
+    """
+    从已保存的 CSV 加载数据。优先读 auc_vs_train_size_aggregated.csv 作为 agg；
+    若无则读 per_run_aucs.csv 再聚合。返回 (df 或 None, agg)。
+    """
+    data_dir = Path(data_dir).resolve()
+    agg_path = data_dir / "auc_vs_train_size_aggregated.csv"
+    per_run_path = data_dir / "per_run_aucs.csv"
+    agg = None
+    df = None
+    if agg_path.exists():
+        agg = pd.read_csv(agg_path)
+        print(f"Loaded aggregated: {agg_path}")
+    if per_run_path.exists():
+        df = pd.read_csv(per_run_path)
+        print(f"Loaded per-run: {per_run_path}")
+        if agg is None:
+            agg = aggregate_by_model_train_size(df)
+            print("Aggregated from per_run_aucs.csv")
+    if agg is None:
+        return None, None
+    return df, agg
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(
         description="四种 MIA 方法 (naive_nn, delta, density, learned) 成功率及 AUC 随 train size (N) 变化，rounds=20 且 ≥5 seeds"
     )
-    parser.add_argument("--outputs", type=Path, default=PROJECT_ROOT / "outputs", help="outputs 目录")
+    parser.add_argument("--outputs", type=Path, default=PROJECT_ROOT / "outputs", help="outputs 目录（扫描 run 时用）")
     parser.add_argument("--outdir", type=Path, default=PROJECT_ROOT / "outputs" / "four_attack_methods", help="输出目录（表+图）")
     parser.add_argument("--n-jobs", type=int, default=4, help="并行进程数")
+    parser.add_argument(
+        "--from-dir",
+        type=Path,
+        default=None,
+        help="已有数据目录：直接从此目录读 per_run_aucs.csv 或 auc_vs_train_size_aggregated.csv，只生成图和表，不重算 AUC",
+    )
     args = parser.parse_args()
+
+    if args.from_dir is not None:
+        # 仅从已存 CSV 生成图与表
+        data_dir = Path(args.from_dir).resolve()
+        df, agg = load_agg_from_saved(data_dir)
+        if agg is None:
+            print("Error: --from-dir 下未找到 auc_vs_train_size_aggregated.csv 或 per_run_aucs.csv")
+            return 1
+        outdir = Path(args.outdir).resolve()
+        if outdir == (PROJECT_ROOT / "outputs" / "four_attack_methods").resolve():
+            outdir = data_dir
+        outdir.mkdir(parents=True, exist_ok=True)
+        if df is not None:
+            print_success_rates(df, agg)
+        else:
+            print("Per (model, train_size) — mean AUC:")
+            cols = [c for c in agg.columns if not c.endswith("_std")]
+            print(agg[cols].to_string(index=False))
+        summary_path = outdir / "four_methods_auc_by_train_size.txt"
+        with open(summary_path, "w", encoding="utf-8") as f:
+            f.write("model\ttrain_size\tnaive_nn\tdelta\tdensity\tlearned\n")
+            for _, r in agg.iterrows():
+                ts = r["train_size"]
+                ts_str = str(int(ts)) if pd.notna(ts) and np.isfinite(ts) else ""
+                f.write(f"{r['model']}\t{ts_str}\t{r['auc_naive_nn']:.4f}\t{r['auc_delta']:.4f}\t{r['auc_density']:.4f}\t{r['auc_learned']:.4f}\n")
+        print(f"Summary written: {summary_path}")
+        plot_auc_vs_train_size(agg, outdir / "auc_vs_train_size_four_methods.png")
+        plot_auc_vs_train_size_combined(agg, outdir / "auc_vs_train_size_combined.png")
+        print("Done (figures from saved data).")
+        return 0
 
     run_dirs = scan_runs(args.outputs)
     run_dirs = filter_rounds20_min5seeds(run_dirs)
