@@ -13,6 +13,7 @@ Attack-agnostic outlier 子集上的 single-release MIA 评估。
 from __future__ import annotations
 
 import argparse
+import hashlib
 import re
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Set, Tuple
@@ -22,6 +23,7 @@ matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
+from scipy import stats as scipy_stats
 from sklearn.metrics import roc_auc_score
 from sklearn.neighbors import NearestNeighbors
 from sklearn.preprocessing import LabelEncoder, StandardScaler
@@ -278,6 +280,7 @@ def process_one_run(run_dir: Path) -> Optional[Dict[str, Any]]:
 
     return {
         "run_dir": run_dir.name,
+        "run_dir_path": str(run_dir.resolve()),
         "model": parsed.get("model"),
         "train_size": parsed.get("train_size"),
         "seed": parsed.get("seed"),
@@ -307,6 +310,70 @@ def sanity_membership_leak(outlier_scores: np.ndarray, is_member: np.ndarray) ->
         return float("nan")
     valid = np.isfinite(outlier_scores)
     return float(roc_auc_score(is_member[valid], outlier_scores[valid]))
+
+
+def leak_check_debug_row(
+    run_dir: str,
+    run_dir_path: str,
+    model: Any,
+    train_size: Any,
+    seed: Any,
+    outlier_def: str,
+    o_scores: np.ndarray,
+    is_member: np.ndarray,
+) -> Dict[str, Any]:
+    """单 run × outlier_def 的 debug 行：n_candidate, mean_is_member, score 统计, n_unique, spearman 等。"""
+    n_candidate = len(is_member)
+    mean_is_member = float(np.mean(is_member))
+    valid = np.isfinite(o_scores)
+    s = o_scores[valid]
+    if len(s) == 0:
+        return {
+            "run_dir": run_dir, "model": model, "train_size": train_size, "seed": seed, "outlier_def": outlier_def,
+            "n_candidate": n_candidate, "mean_is_member": mean_is_member,
+            "score_mean": np.nan, "score_std": np.nan, "score_min": np.nan, "score_max": np.nan,
+            "score_p01": np.nan, "score_p50": np.nan, "score_p99": np.nan,
+            "n_unique_scores": 0, "unique_ratio": np.nan,
+            "spearman_r": np.nan, "spearman_p": np.nan, "auc_membership_leak": np.nan,
+        }
+    score_mean = float(np.mean(s))
+    score_std = float(np.std(s)) if len(s) > 1 else 0.0
+    score_min = float(np.min(s))
+    score_max = float(np.max(s))
+    score_p01 = float(np.percentile(s, 1))
+    score_p50 = float(np.percentile(s, 50))
+    score_p99 = float(np.percentile(s, 99))
+    n_unique = int(len(np.unique(s)))
+    unique_ratio = n_unique / n_candidate if n_candidate else np.nan
+    auc_leak = sanity_membership_leak(o_scores, is_member)
+    y = is_member[valid]
+    if len(np.unique(y)) >= 2 and len(s) >= 2:
+        sp = scipy_stats.spearmanr(s, y)
+        spearman_r = float(sp.statistic)
+        spearman_p = float(sp.pvalue)
+    else:
+        spearman_r = np.nan
+        spearman_p = np.nan
+    return {
+        "run_dir": run_dir, "model": model, "train_size": train_size, "seed": seed, "outlier_def": outlier_def,
+        "n_candidate": n_candidate, "mean_is_member": mean_is_member,
+        "score_mean": score_mean, "score_std": score_std, "score_min": score_min, "score_max": score_max,
+        "score_p01": score_p01, "score_p50": score_p50, "score_p99": score_p99,
+        "n_unique_scores": n_unique, "unique_ratio": unique_ratio,
+        "spearman_r": spearman_r, "spearman_p": spearman_p, "auc_membership_leak": auc_leak,
+    }
+
+
+def candidate_file_fingerprint(run_dir_path: str) -> Tuple[int, str]:
+    """返回 (文件大小, 前 4096 字节的 SHA256 前 16 位指纹)。"""
+    p = Path(run_dir_path) / "candidate.csv"
+    if not p.exists():
+        return -1, ""
+    size = p.stat().st_size
+    with open(p, "rb") as f:
+        head = f.read(4096)
+    h = hashlib.sha256(head).hexdigest()[:16]
+    return size, h
 
 
 def main() -> int:
@@ -350,19 +417,48 @@ def main() -> int:
             })
     pd.DataFrame(score_rows).to_csv(args.outdir / "outlier_score_stats.csv", index=False)
 
-    # Sanity: membership leak
+    # Sanity: membership leak + debug 表 + candidate 文件指纹 + 同 train_size 一致性检查
     leak_rows = []
+    leak_debug_rows = []
+    seen_run_paths: Set[str] = set()
     for r in results:
         cand = r["candidate"]
         if IS_MEMBER_COL not in cand.columns:
             continue
         y = cand[IS_MEMBER_COL].to_numpy()
+        run_dir_path = r.get("run_dir_path", "")
+        if run_dir_path and run_dir_path not in seen_run_paths:
+            seen_run_paths.add(run_dir_path)
+            size, fp = candidate_file_fingerprint(run_dir_path)
+            print(f"[candidate.csv] run_dir={r['run_dir']} size={size} fingerprint={fp}")
         for def_name, o_scores in r["outlier_scores"].items():
             auc_leak = sanity_membership_leak(o_scores, y)
             leak_rows.append({"run_dir": r["run_dir"], "model": r["model"], "train_size": r["train_size"], "outlier_def": def_name, "auc_membership_leak": auc_leak})
+            leak_debug_rows.append(leak_check_debug_row(
+                r["run_dir"], run_dir_path, r["model"], r["train_size"], r["seed"], def_name, o_scores, y
+            ))
     leak_df = pd.DataFrame(leak_rows)
     leak_df.to_csv(args.outdir / "outlier_score_membership_leak_check.csv", index=False)
     print(f"Membership leak check: {leak_df['auc_membership_leak'].mean():.4f} (expect ~0.5)")
+    debug_df = pd.DataFrame(leak_debug_rows)
+    debug_df.to_csv(args.outdir / "outlier_score_membership_leak_check_debug.csv", index=False)
+    print(f"Wrote {args.outdir / 'outlier_score_membership_leak_check_debug.csv'}")
+
+    # 同一 train_size 下多 seed 的 score_mean/score_std/n_unique_scores 是否完全一致
+    for key, grp in debug_df.groupby(["model", "train_size", "outlier_def"], dropna=False):
+        model, train_size, outlier_def = key
+        sm = grp["score_mean"].dropna()
+        ss = grp["score_std"].dropna()
+        nu = grp["n_unique_scores"]
+        if len(grp) >= 2:
+            same_mean = sm.nunique() <= 1
+            same_std = ss.nunique() <= 1
+            same_nu = nu.nunique() <= 1
+            if same_mean and same_std and same_nu:
+                print(f"[WARNING] 同一 train_size 下各 seed 的 outlier 统计完全一致: model={model} train_size={train_size} outlier_def={outlier_def} "
+                      f"score_mean={sm.iloc[0]} score_std={ss.iloc[0]} n_unique_scores={int(nu.iloc[0])} (疑似 candidate 未变或实现有误)")
+                for _, row in grp.iterrows():
+                    print(f"  seed={row['seed']} run_dir={row['run_dir']} score_mean={row['score_mean']} score_std={row['score_std']} n_unique_scores={row['n_unique_scores']}")
 
     # Fig 1: Subset size vs AUC (facet by train_size, line by outlier_def)
     for model in curves_df["model"].dropna().unique():
