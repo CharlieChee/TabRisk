@@ -185,6 +185,13 @@ python scripts/run_membership_scaling_analysis.py --outputs outputs --outdir out
 python scripts/run_membership_scaling_robust.py --outputs outputs --outdir outputs/figures --n_jobs 4
 
 
+# ---------- DDPM 反弹统计显著性与稳健性验证 ----------
+# 依赖：run_level_adv_abs.csv, run_level_adv_abs_density.csv, run_level_adv_abs_clf.csv（含 model==ddpm）
+# 产出：ddpm_scaling_significance_summary.csv, ddpm_bootstrap_by_N.csv, ddpm_leave_one_out_slopes.csv, ddpm_permutation_test.csv, fig_ddpm_bootstrap_scaling.png
+# --n_jobs 4 可加速 PART 2/3/4（bootstrap、LOO、permutation）
+python scripts/run_ddpm_scaling_validation.py --indir outputs/figures --outdir outputs/figures --n_jobs 4
+
+
 # ---------- Adult+CTGAN LOO-MIA 端到端后处理（论文结果包） ----------
 # 产出：统一总表、平衡子集、Fig1–Fig4、Table1、可选 Fig5 learned attacker、postprocess_report.txt
 # 要求 run 名称含 adult + control，且 shadow_pair_metrics 下存在 pair_metrics.csv、pair_metrics_control.csv、mmd_component_analysis.json
