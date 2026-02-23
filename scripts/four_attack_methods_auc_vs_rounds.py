@@ -145,7 +145,13 @@ def _auc_density_full(df_m: pd.DataFrame, df_c: pd.DataFrame) -> float:
     return _auc_opt(scores, labels)
 
 
-# ---------- 4. Learned：全量数据 ----------
+# ---------- 3b. Density（无 contrast）：仅用 min_dist_in，与 Naive NN 同信号 ----------
+def _auc_density_single_full(df_m: pd.DataFrame, df_c: pd.DataFrame) -> float:
+    """无 contrast：只取一份合成集上的距离，score = -min_dist_in。与 naive_nn 逻辑一致。"""
+    return _auc_naive_nn_full(df_m, df_c)
+
+
+# ---------- 4. Learned：全量数据（多特征，需 in/out 对比） ----------
 def _auc_learned_full(df_m: pd.DataFrame, df_c: pd.DataFrame, cv: int = 5) -> float:
     if len(df_m) + len(df_c) < 10:
         return float("nan")
@@ -168,10 +174,38 @@ def _auc_learned_full(df_m: pd.DataFrame, df_c: pd.DataFrame, cv: int = 5) -> fl
     return max(auc, 1.0 - auc)
 
 
+# ---------- 4b. Learned（无 contrast）：仅用单份集可算的特征（min_dist_in） ----------
+SINGLE_SET_FEATURES = ["min_dist_in"]  # 仅一份合成集时唯一可得的距离信号
+
+
+def _auc_learned_single_full(df_m: pd.DataFrame, df_c: pd.DataFrame, cv: int = 5) -> float:
+    """无 contrast：LR 只用 min_dist_in 等单份集特征，不依赖 in/out 对比。"""
+    if len(df_m) + len(df_c) < 10:
+        return float("nan")
+    numeric_m = set(df_m.select_dtypes(include=[np.number]).columns)
+    numeric_c = set(df_c.select_dtypes(include=[np.number]).columns)
+    common = numeric_m & numeric_c - {"target_idx", "round"}
+    feature_cols = [x for x in SINGLE_SET_FEATURES if x in common]
+    if not feature_cols:
+        return float("nan")
+    Xm = df_m[feature_cols].replace([np.inf, -np.inf], np.nan).fillna(0).to_numpy()
+    Xc = df_c[feature_cols].replace([np.inf, -np.inf], np.nan).fillna(0).to_numpy()
+    X = np.vstack([Xm, Xc])
+    y = np.concatenate([np.ones(len(Xm)), np.zeros(len(Xc))])
+    if np.unique(y).size < 2 or len(y) < cv:
+        return float("nan")
+    X = StandardScaler().fit_transform(X)
+    clf = LogisticRegression(max_iter=1000, random_state=42)
+    res = cross_validate(clf, X, y, cv=min(cv, len(y) // 2), scoring="roc_auc", return_train_score=False)
+    auc = float(np.mean(res["test_score"]))
+    return max(auc, 1.0 - auc)
+
+
 def compute_one_run_aucs(run_dir_str: str) -> Optional[Dict[str, Any]]:
     """
-    单 run：用该 run 的全部数据（20 个影子模型的所有 target×round 行）算 4 种方法的 AUC 各一个。
-    返回 dict: model, train_size, seed, run_dir, auc_naive_nn, auc_delta, auc_density, auc_learned。
+    单 run：用该 run 的全部数据（20 个影子模型的所有 target×round 行）算各方法 AUC。
+    含无 contrast 版本：density_single（仅 min_dist_in）、learned_single（仅 min_dist_in 特征）。
+    返回 dict: model, train_size, seed, run_dir, auc_naive_nn, auc_delta, auc_density, auc_learned, auc_density_single, auc_learned_single。
     """
     run_dir = Path(run_dir_str)
     metrics_dir = run_dir / "shadow_pair_metrics"
@@ -195,6 +229,8 @@ def compute_one_run_aucs(run_dir_str: str) -> Optional[Dict[str, Any]]:
         "auc_delta": _auc_delta_full(df_m, df_c),
         "auc_density": _auc_density_full(df_m, df_c),
         "auc_learned": _auc_learned_full(df_m, df_c),
+        "auc_density_single": _auc_density_single_full(df_m, df_c),
+        "auc_learned_single": _auc_learned_single_full(df_m, df_c),
     }
 
 
@@ -274,9 +310,17 @@ def results_to_df(results: List[Dict[str, Any]]) -> pd.DataFrame:
     return pd.DataFrame(results)
 
 
+ALL_METHODS = [
+    "auc_naive_nn", "auc_delta", "auc_density", "auc_learned",
+    "auc_density_single", "auc_learned_single",
+]
+
+
 def aggregate_by_model_train_size(df: pd.DataFrame) -> pd.DataFrame:
     """按 (model, train_size) 聚合成 mean ± std，用于画图。"""
-    methods = ["auc_naive_nn", "auc_delta", "auc_density", "auc_learned"]
+    methods = [m for m in ALL_METHODS if m in df.columns]
+    if not methods:
+        return pd.DataFrame()
     means = df.groupby(["model", "train_size"], as_index=False)[methods].mean()
     stds = df.groupby(["model", "train_size"], as_index=False)[methods].std()
     stds = stds.rename(columns={m: f"{m}_std" for m in methods})
@@ -284,11 +328,17 @@ def aggregate_by_model_train_size(df: pd.DataFrame) -> pd.DataFrame:
     return agg
 
 
+METHOD_SHORT_NAMES = {
+    "auc_naive_nn": "naive_nn", "auc_delta": "delta", "auc_density": "density", "auc_learned": "learned",
+    "auc_density_single": "density(single)", "auc_learned_single": "learned(single)",
+}
+
+
 def print_success_rates(df: pd.DataFrame, agg: pd.DataFrame) -> None:
-    """打印四种方法成功率：按 (model, train_size) 及整体。"""
-    methods = ["auc_naive_nn", "auc_delta", "auc_density", "auc_learned"]
-    method_short = ["naive_nn", "delta", "density", "learned"]
-    print("\n========== 四种攻击方法成功率 (AUC, 每 run 用全部 20 影子模型数据) ==========\n")
+    """打印各方法成功率：按 (model, train_size) 及整体。"""
+    methods = [m for m in ALL_METHODS if m in df.columns]
+    method_short = [METHOD_SHORT_NAMES.get(m, m) for m in methods]
+    print("\n========== 攻击方法成功率 (AUC, 每 run 用全部 20 影子模型数据) ==========\n")
     for model in sorted(df["model"].unique()):
         sub = df[df["model"] == model]
         print(f"  [{model.upper()}] mean AUC over runs:")
@@ -311,16 +361,21 @@ def print_success_rates(df: pd.DataFrame, agg: pd.DataFrame) -> None:
 
 
 def plot_auc_vs_train_size(agg: pd.DataFrame, out_path: Path) -> None:
-    """4 子图（每方法一个），x=train_size(N)，y=mean AUC，不同模型同图、legend 区分，带 error bar。"""
-    methods = ["auc_naive_nn", "auc_delta", "auc_density", "auc_learned"]
+    """6 子图（每方法一个），x=train_size(N)，y=mean AUC，不同模型同图、legend 区分，带 error bar。"""
+    methods = [m for m in ALL_METHODS if m in agg.columns]
     method_labels = {
         "auc_naive_nn": "Naive NN (min_dist only)",
         "auc_delta": "Delta",
         "auc_density": "Density",
         "auc_learned": "Learned attacker",
+        "auc_density_single": "Density (no contrast)",
+        "auc_learned_single": "Learned (no contrast)",
     }
-    fig, axes = plt.subplots(2, 2, figsize=(10, 8), sharex=True)
-    axes = axes.flatten()
+    n = len(methods)
+    ncol = 3
+    nrow = (n + ncol - 1) // ncol
+    fig, axes = plt.subplots(nrow, ncol, figsize=(4 * ncol, 4 * nrow), sharex=True)
+    axes = np.atleast_1d(axes).flatten()[:n]
     colors = {"ctgan": "C0", "ddpm": "C1"}
     for i, method in enumerate(methods):
         ax = axes[i]
@@ -345,6 +400,8 @@ def plot_auc_vs_train_size(agg: pd.DataFrame, out_path: Path) -> None:
         ax.grid(True, alpha=0.3)
         ax.set_ylim(0.45, 1.0)
         ax.axhline(0.5, color="gray", linestyle="--", linewidth=0.8)
+    for j in range(n, len(axes)):
+        axes[j].set_visible(False)
     fig.suptitle("AUC vs Train size (N); rounds=20 shadow models per target, ≥5 seeds per setting", fontsize=11)
     fig.tight_layout()
     out_path.parent.mkdir(parents=True, exist_ok=True)
@@ -353,24 +410,28 @@ def plot_auc_vs_train_size(agg: pd.DataFrame, out_path: Path) -> None:
     print(f"Figure saved: {out_path}")
 
 
-# 四种方法 × 两种模型：区分度高的配色（方法用颜色，模型用线型+标记）
+# 方法 × 模型：区分度高的配色（方法用颜色，模型用线型+标记）
 METHOD_COLORS = {
-    "auc_naive_nn": "#2E86AB",    # 钢蓝
-    "auc_delta": "#E94F37",       # 朱红
-    "auc_density": "#44AF69",    # 青绿
-    "auc_learned": "#7B2D8E",    # 紫
+    "auc_naive_nn": "#2E86AB",
+    "auc_delta": "#E94F37",
+    "auc_density": "#44AF69",
+    "auc_learned": "#7B2D8E",
+    "auc_density_single": "#5C7C99",
+    "auc_learned_single": "#9B59B6",
 }
 METHOD_LABELS_SHORT = {
     "auc_naive_nn": "Naive NN",
     "auc_delta": "Delta",
     "auc_density": "Density",
     "auc_learned": "Learned",
+    "auc_density_single": "Density (single)",
+    "auc_learned_single": "Learned (single)",
 }
 
 
 def plot_auc_vs_train_size_combined(agg: pd.DataFrame, out_path: Path) -> None:
-    """所有 8 条线（4 方法 × 2 模型）画在同一张图里，配色清晰、有区分度。"""
-    methods = ["auc_naive_nn", "auc_delta", "auc_density", "auc_learned"]
+    """所有方法×模型线画在同一张图里，配色清晰、有区分度。"""
+    methods = [m for m in ALL_METHODS if m in agg.columns]
     fig, ax = plt.subplots(figsize=(9, 5.5))
     # 模型区分：CTGAN 实线+圆点，DDPM 虚线+方点
     model_style = {"ctgan": ("-", "o", 6), "ddpm": ("--", "s", 5)}
@@ -464,12 +525,14 @@ def main() -> int:
             cols = [c for c in agg.columns if not c.endswith("_std")]
             print(agg[cols].to_string(index=False))
         summary_path = outdir / "four_methods_auc_by_train_size.txt"
+        auc_cols = [c for c in agg.columns if c.startswith("auc_") and not c.endswith("_std")]
         with open(summary_path, "w", encoding="utf-8") as f:
-            f.write("model\ttrain_size\tnaive_nn\tdelta\tdensity\tlearned\n")
+            f.write("model\ttrain_size\t" + "\t".join(METHOD_SHORT_NAMES.get(c, c) for c in auc_cols) + "\n")
             for _, r in agg.iterrows():
                 ts = r["train_size"]
                 ts_str = str(int(ts)) if pd.notna(ts) and np.isfinite(ts) else ""
-                f.write(f"{r['model']}\t{ts_str}\t{r['auc_naive_nn']:.4f}\t{r['auc_delta']:.4f}\t{r['auc_density']:.4f}\t{r['auc_learned']:.4f}\n")
+                vals = "\t".join(f"{r[c]:.4f}" for c in auc_cols if c in r.index)
+                f.write(f"{r['model']}\t{ts_str}\t{vals}\n")
         print(f"Summary written: {summary_path}")
         plot_auc_vs_train_size(agg, outdir / "auc_vs_train_size_four_methods.png")
         plot_auc_vs_train_size_combined(agg, outdir / "auc_vs_train_size_combined.png")
@@ -495,12 +558,14 @@ def main() -> int:
 
     print_success_rates(df, agg)
     summary_path = args.outdir / "four_methods_auc_by_train_size.txt"
+    auc_cols = [c for c in agg.columns if c.startswith("auc_") and not c.endswith("_std")]
     with open(summary_path, "w", encoding="utf-8") as f:
-        f.write("model\ttrain_size\tnaive_nn\tdelta\tdensity\tlearned\n")
+        f.write("model\ttrain_size\t" + "\t".join(METHOD_SHORT_NAMES.get(c, c) for c in auc_cols) + "\n")
         for _, r in agg.iterrows():
             ts = r["train_size"]
             ts_str = str(int(ts)) if pd.notna(ts) and np.isfinite(ts) else ""
-            f.write(f"{r['model']}\t{ts_str}\t{r['auc_naive_nn']:.4f}\t{r['auc_delta']:.4f}\t{r['auc_density']:.4f}\t{r['auc_learned']:.4f}\n")
+            vals = "\t".join(f"{r[c]:.4f}" for c in auc_cols if c in r.index)
+            f.write(f"{r['model']}\t{ts_str}\t{vals}\n")
     print(f"Summary written: {summary_path}")
 
     plot_auc_vs_train_size(agg, args.outdir / "auc_vs_train_size_four_methods.png")
