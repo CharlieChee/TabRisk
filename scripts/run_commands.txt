@@ -217,6 +217,15 @@ python scripts/adult_ctgan_statistical_analysis.py --summary outputs/postprocess
 # python scripts/adult_ctgan_statistical_analysis.py ... --scaling-with-learned outputs/postprocess_adult_ctgan/scaling_with_learned.csv
 
 
+# ---------- Outlier 子集上的 single-release MIA（attack-agnostic） ----------
+# 定义：density（kNN 距离）、rare（稀有类别），不用 AUC/delta/control 挑子集。
+# 子集：top p% (p=5,10,20,50,100)。评估：target 级 -median(min_dist_in) 的 subgroup AUC。
+# 输出：outlier_auc_curves.csv, outlier_auc_summary_byN.csv, outlier_score_stats.csv,
+#       fig_outlier_auc_vs_subsetsize_*.png, fig_outlier_auc_vs_N_fixedp.png,
+#       fig_outlier_score_distribution_byN.png, fig_outlier_score_membership_auc.png,
+#       outlier_score_membership_leak_check.csv, outlier_stability_across_seeds.csv
+# python scripts/outlier_subgroup_mia.py --outputs outputs --outdir outputs/outlier_mia
+
 # ========== 实验流程与当前工作（第一人称简述） ==========
 #
 # 一、整体实验流程
