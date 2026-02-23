@@ -269,23 +269,17 @@ def filter_rounds20_min5seeds(run_dirs: List[Path]) -> List[Path]:
     if not rows:
         return []
     df = pd.DataFrame(rows)
-    # 每个 (model, train_size) 至少 5 seeds
-    counts = df.groupby(["model", "train_size"]).agg(
-        seed_count=("seed", "nunique"),
-        runs=("run_dir", "list"),
-    ).reset_index()
-    keep = counts[counts["seed_count"] >= 5]
-    if keep.empty:
+    # 每个 (model, train_size) 至少 5 seeds：先算 seed 数，再筛出合格 setting
+    seed_counts = df.groupby(["model", "train_size"])["seed"].nunique().reset_index()
+    seed_counts.columns = ["model", "train_size", "seed_count"]
+    valid_settings = seed_counts[seed_counts["seed_count"] >= 5][["model", "train_size"]]
+    if valid_settings.empty:
         return []
-    run_set = set()
-    for _, r in keep.iterrows():
-        for path in r["runs"]:
-            run_set.add(path)
+    df_valid = df.merge(valid_settings, on=["model", "train_size"], how="inner")
     # 每个 (model, train_size, seed) 保留一条（timestamp 最新）
-    df_keep = df[df["run_dir"].isin(run_set)].copy()
-    df_keep = df_keep.sort_values("timestamp", ascending=True, na_position="last")
-    df_keep = df_keep.drop_duplicates(subset=["model", "train_size", "seed"], keep="last")
-    return [Path(p) for p in df_keep["run_dir"].tolist()]
+    df_valid = df_valid.sort_values("timestamp", ascending=True, na_position="last")
+    df_valid = df_valid.drop_duplicates(subset=["model", "train_size", "seed"], keep="last")
+    return [Path(p) for p in df_valid["run_dir"].tolist()]
 
 
 def run_parallel(run_dirs: List[Path], n_jobs: int) -> List[Dict[str, Any]]:
