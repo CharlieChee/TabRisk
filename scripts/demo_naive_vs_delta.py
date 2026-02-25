@@ -187,10 +187,11 @@ def main() -> int:
         auc_row = auc_df.iloc[0]
 
     if not scores_csv.exists():
-        print("警告: 无 per-pair 分数文件，仅画 AUC 对比图")
+        print("Warning: no per-pair scores file, only plotting AUC comparison.")
     else:
         scores_df = pd.read_csv(scores_csv)
         plot_score_distributions(scores_df, outdir / "score_distributions.png", run_name, use_density=args.use_density)
+        plot_learned_score_distribution(scores_df, outdir / "score_distributions_learned.png", run_name)
 
     plot_auc_comparison(auc_row, outdir / "auc_naive_vs_delta.png", run_name)
     return 0
