@@ -22,7 +22,8 @@ import pandas as pd
 from sklearn.ensemble import GradientBoostingClassifier, RandomForestClassifier
 from sklearn.linear_model import LogisticRegression
 from sklearn.metrics import roc_auc_score
-from sklearn.model_selection import cross_validate
+from sklearn.model_selection import GroupKFold, cross_validate
+from sklearn.pipeline import Pipeline
 from sklearn.preprocessing import StandardScaler
 
 # Learned 攻击器：名称后缀 -> 无参构造器（每次 CV 新建实例）
@@ -372,8 +373,8 @@ def _ensure_pair_metrics(run_dir: Path, n_jobs: int = 4) -> bool:
 
 def _compute_learned_aucs(run_dir: Path, cv: int = 5) -> Dict[str, float]:
     """
-    从 pair_metrics 计算 Naive/Delta Learned 的 AUC，对每种分类器（lr/rf/gb）分别 5-fold CV。
-    返回 auc_naive_learned_{lr,rf,gb}, auc_delta_learned_{lr,rf,gb}。
+    从 pair_metrics 计算 Naive/Delta Learned 的 AUC。按 (target_idx, round) 做 GroupKFold，
+    同一对的 member/control 必须同进 train 或同进 test，避免配对泄漏；标准化用 Pipeline 仅在 train 上拟合。
     """
     out: Dict[str, float] = {}
     pair_path = run_dir / "shadow_pair_metrics" / "pair_metrics.csv"
@@ -384,60 +385,61 @@ def _compute_learned_aucs(run_dir: Path, cv: int = 5) -> Dict[str, float]:
     df_c = pd.read_csv(control_path)
     if df_m.empty or df_c.empty:
         return out
-    common = set(df_m.select_dtypes(include=[np.number]).columns) & set(df_c.select_dtypes(include=[np.number]).columns)
-    common -= {"target_idx", "round"}
-    feature_cols = [x for x in FEATURE_CANDIDATES if x in common] or sorted(common)
-    if not feature_cols:
-        return out
-
-    def _cv_auc(X: np.ndarray, y: np.ndarray, suffix: str, factory: Callable[[], Any], prefix_naive: bool) -> None:
-        n_cv = min(cv, len(y) // 2)
-        if len(y) < n_cv * 2 or len(set(y)) < 2:
-            key = f"auc_{'naive' if prefix_naive else 'delta'}_learned_{suffix}"
-            out[key] = float("nan")
-            return
-        X = StandardScaler().fit_transform(X)
-        clf = factory()
-        res = cross_validate(clf, X, y, cv=n_cv, scoring="roc_auc", return_train_score=False)
-        mean_auc = float(np.mean(res["test_score"]))
-        key = f"auc_{'naive' if prefix_naive else 'delta'}_learned_{suffix}"
-        out[key] = max(mean_auc, 1.0 - mean_auc)
-
-    # Naive: member 行 vs control 行
-    Xm = df_m[feature_cols].replace([np.inf, -np.inf], np.nan).fillna(0).to_numpy()
-    Xc = df_c[feature_cols].replace([np.inf, -np.inf], np.nan).fillna(0).to_numpy()
-    X_naive = np.vstack([Xm, Xc])
-    y_naive = np.concatenate([np.ones(len(Xm)), np.zeros(len(Xc))])
-    for suffix, factory in LEARNED_CLASSIFIERS:
-        _cv_auc(X_naive, y_naive, suffix, factory, prefix_naive=True)
-
-    # Delta: 按 (target_idx, round) 对齐，delta = member - control，(delta,1) 与 (-delta,0)
     id_cols = [c for c in ["target_idx", "round"] if c in df_m.columns and c in df_c.columns]
     if not id_cols:
         for suffix, _ in LEARNED_CLASSIFIERS:
-            out[f"auc_delta_learned_{suffix}"] = float("nan")
+            out[f"auc_naive_learned_{suffix}"] = out[f"auc_delta_learned_{suffix}"] = float("nan")
         return out
     merged = df_m.merge(df_c, on=id_cols, how="inner", suffixes=("_m", "_c"))
     if merged.empty:
         for suffix, _ in LEARNED_CLASSIFIERS:
-            out[f"auc_delta_learned_{suffix}"] = float("nan")
+            out[f"auc_naive_learned_{suffix}"] = out[f"auc_delta_learned_{suffix}"] = float("nan")
         return out
-    feat_m = [c for c in merged.columns if c.endswith("_m") and c.replace("_m", "") in feature_cols]
-    feat_c = [c.replace("_m", "_c") for c in feat_m]
-    if len(feat_m) != len(feature_cols):
-        feat_m = [f"{c}_m" for c in feature_cols if f"{c}_m" in merged.columns]
-        feat_c = [f"{c}_c" for c in feature_cols if f"{c}_c" in merged.columns]
+    common = set(df_m.select_dtypes(include=[np.number]).columns) & set(df_c.select_dtypes(include=[np.number]).columns)
+    common -= {"target_idx", "round"}
+    feature_cols = [x for x in FEATURE_CANDIDATES if x in common] or sorted(common)
+    feat_m = [f"{c}_m" for c in feature_cols if f"{c}_m" in merged.columns]
+    feat_c = [f"{c}_c" for c in feature_cols if f"{c}_c" in merged.columns]
     if not feat_m or not feat_c:
         for suffix, _ in LEARNED_CLASSIFIERS:
-            out[f"auc_delta_learned_{suffix}"] = float("nan")
+            out[f"auc_naive_learned_{suffix}"] = out[f"auc_delta_learned_{suffix}"] = float("nan")
         return out
+
+    N = len(merged)
+    n_cv = min(cv, max(2, N // 2))
+    gkf = GroupKFold(n_splits=n_cv)
+
     M = merged[feat_m].replace([np.inf, -np.inf], np.nan).fillna(0).to_numpy()
     C = merged[feat_c].replace([np.inf, -np.inf], np.nan).fillna(0).to_numpy()
+
+    # Naive：从 merged 对齐，同一对 (member 行 + control 行) 必须同进 train 或同进 test
+    X_naive = np.vstack([M, C])
+    y_naive = np.concatenate([np.ones(N), np.zeros(N)])
+    groups_naive = np.concatenate([np.arange(N), np.arange(N)])
+
+    # Delta：每对两行 (delta,1) 与 (-delta,0)，同一对两行同一 group
     delta = M - C
     X_delta = np.vstack([delta, -delta])
-    y_delta = np.concatenate([np.ones(len(delta)), np.zeros(len(delta))])
+    y_delta = np.concatenate([np.ones(N), np.zeros(N)])
+    groups_delta = np.repeat(np.arange(N), 2)
+
+    def _cv_auc_groups(
+        X: np.ndarray, y: np.ndarray, groups: np.ndarray, suffix: str, factory: Callable[[], Any], prefix_naive: bool
+    ) -> None:
+        if len(np.unique(groups)) < n_cv or len(set(y)) < 2:
+            key = f"auc_{'naive' if prefix_naive else 'delta'}_learned_{suffix}"
+            out[key] = float("nan")
+            return
+        pipe = Pipeline([("scaler", StandardScaler()), ("clf", factory())])
+        res = cross_validate(pipe, X, y, groups=groups, cv=gkf, scoring="roc_auc", return_train_score=False)
+        mean_auc = float(np.mean(res["test_score"]))
+        key = f"auc_{'naive' if prefix_naive else 'delta'}_learned_{suffix}"
+        out[key] = max(mean_auc, 1.0 - mean_auc)
+
     for suffix, factory in LEARNED_CLASSIFIERS:
-        _cv_auc(X_delta, y_delta, suffix, factory, prefix_naive=False)
+        _cv_auc_groups(X_naive, y_naive, groups_naive, suffix, factory, prefix_naive=True)
+    for suffix, factory in LEARNED_CLASSIFIERS:
+        _cv_auc_groups(X_delta, y_delta, groups_delta, suffix, factory, prefix_naive=False)
     return out
 
 
