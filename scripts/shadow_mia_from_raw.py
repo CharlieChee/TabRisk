@@ -371,10 +371,12 @@ def _ensure_pair_metrics(run_dir: Path, n_jobs: int = 4) -> bool:
     return pair_path.exists() and control_path.exists()
 
 
-def _compute_learned_aucs(run_dir: Path, cv: int = 5) -> Dict[str, float]:
+def _compute_learned_aucs(run_dir: Path, cv: int = 5, random_state: int = 42) -> Dict[str, float]:
     """
-    从 pair_metrics 计算 Naive/Delta Learned 的 AUC。按 (target_idx, round) 做 GroupKFold，
-    同一对的 member/control 必须同进 train 或同进 test，避免配对泄漏；标准化用 Pipeline 仅在 train 上拟合。
+    从 pair_metrics 计算 Naive/Delta Learned 的 AUC。
+    - 按 (target_idx, round) 成对：同一对的两行必须同进 train 或同进 test，用显式按组划分避免泄漏。
+    - 先对 merged 打乱顺序，再构造 X/y/groups，避免 group 顺序带来偏差。
+    - 标准化用 Pipeline 仅在 train 上拟合。
     """
     out: Dict[str, float] = {}
     pair_path = run_dir / "shadow_pair_metrics" / "pair_metrics.csv"
@@ -405,41 +407,82 @@ def _compute_learned_aucs(run_dir: Path, cv: int = 5) -> Dict[str, float]:
             out[f"auc_naive_learned_{suffix}"] = out[f"auc_delta_learned_{suffix}"] = float("nan")
         return out
 
+    # 打乱 pair 顺序，避免 (target_idx, round) 的原始顺序带来 train/test 分布偏差
+    merged = merged.sample(frac=1, random_state=random_state).reset_index(drop=True)
     N = len(merged)
     n_cv = min(cv, max(2, N // 2))
-    gkf = GroupKFold(n_splits=n_cv)
 
     M = merged[feat_m].replace([np.inf, -np.inf], np.nan).fillna(0).to_numpy()
     C = merged[feat_c].replace([np.inf, -np.inf], np.nan).fillna(0).to_numpy()
 
-    # Naive：从 merged 对齐，同一对 (member 行 + control 行) 必须同进 train 或同进 test
+    # Naive：行 0..N-1 = member 特征，行 N..2N-1 = control 特征；group i 对应 pair i 的两行
     X_naive = np.vstack([M, C])
     y_naive = np.concatenate([np.ones(N), np.zeros(N)])
     groups_naive = np.concatenate([np.arange(N), np.arange(N)])
 
-    # Delta：每对两行 (delta,1) 与 (-delta,0)，同一对两行同一 group
+    # Delta：每对两行 (delta,1) 与 (-delta,0)
     delta = M - C
     X_delta = np.vstack([delta, -delta])
     y_delta = np.concatenate([np.ones(N), np.zeros(N)])
     groups_delta = np.repeat(np.arange(N), 2)
 
-    def _cv_auc_groups(
-        X: np.ndarray, y: np.ndarray, groups: np.ndarray, suffix: str, factory: Callable[[], Any], prefix_naive: bool
+    # 显式按组划分：先打乱 group id，再按 fold 分配，保证同一 group 只出现在 train 或 test 之一
+    rng = np.random.default_rng(random_state)
+    group_ids = np.arange(N)
+    rng.shuffle(group_ids)
+    n_per_fold = max(1, N // n_cv)
+    splits_naive: List[Tuple[np.ndarray, np.ndarray]] = []
+    for f in range(n_cv):
+        test_groups = set(
+            group_ids[f * n_per_fold : (f + 1) * n_per_fold] if f < n_cv - 1 else group_ids[f * n_per_fold :]
+        )
+        if f == n_cv - 1 and len(test_groups) == 0:
+            test_groups = set(group_ids[(n_cv - 1) * n_per_fold :])
+        test_idx = np.array([i for i in range(2 * N) if groups_naive[i] in test_groups], dtype=np.intp)
+        train_idx = np.array([i for i in range(2 * N) if groups_naive[i] not in test_groups], dtype=np.intp)
+        assert set(groups_naive[train_idx]) & set(groups_naive[test_idx]) == set(), "group leak"
+        splits_naive.append((train_idx, test_idx))
+    # 若某折 test 为空或单类，则用 GroupKFold 兜底
+    if any(len(s[1]) < 4 or len(np.unique(y_naive[s[1]])) < 2 for s in splits_naive):
+        gkf = GroupKFold(n_splits=n_cv)
+        splits_naive = list(gkf.split(X_naive, y_naive, groups_naive))
+
+    splits_delta: List[Tuple[np.ndarray, np.ndarray]] = []
+    for f in range(n_cv):
+        test_groups = set(
+            group_ids[f * n_per_fold : (f + 1) * n_per_fold] if f < n_cv - 1 else group_ids[f * n_per_fold :]
+        )
+        if f == n_cv - 1 and len(test_groups) == 0:
+            test_groups = set(group_ids[(n_cv - 1) * n_per_fold :])
+        test_idx = np.array([i for i in range(2 * N) if groups_delta[i] in test_groups], dtype=np.intp)
+        train_idx = np.array([i for i in range(2 * N) if groups_delta[i] not in test_groups], dtype=np.intp)
+        assert set(groups_delta[train_idx]) & set(groups_delta[test_idx]) == set(), "group leak"
+        splits_delta.append((train_idx, test_idx))
+    if any(len(s[1]) < 4 or len(np.unique(y_delta[s[1]])) < 2 for s in splits_delta):
+        gkf = GroupKFold(n_splits=n_cv)
+        splits_delta = list(gkf.split(X_delta, y_delta, groups_delta))
+
+    def _cv_auc_splits(
+        X: np.ndarray,
+        y: np.ndarray,
+        splits: List[Tuple[np.ndarray, np.ndarray]],
+        suffix: str,
+        factory: Callable[[], Any],
+        prefix_naive: bool,
     ) -> None:
-        if len(np.unique(groups)) < n_cv or len(set(y)) < 2:
-            key = f"auc_{'naive' if prefix_naive else 'delta'}_learned_{suffix}"
+        key = f"auc_{'naive' if prefix_naive else 'delta'}_learned_{suffix}"
+        if len(splits) < 2:
             out[key] = float("nan")
             return
         pipe = Pipeline([("scaler", StandardScaler()), ("clf", factory())])
-        res = cross_validate(pipe, X, y, groups=groups, cv=gkf, scoring="roc_auc", return_train_score=False)
+        res = cross_validate(pipe, X, y, cv=splits, scoring="roc_auc", return_train_score=False)
         mean_auc = float(np.mean(res["test_score"]))
-        key = f"auc_{'naive' if prefix_naive else 'delta'}_learned_{suffix}"
         out[key] = max(mean_auc, 1.0 - mean_auc)
 
     for suffix, factory in LEARNED_CLASSIFIERS:
-        _cv_auc_groups(X_naive, y_naive, groups_naive, suffix, factory, prefix_naive=True)
+        _cv_auc_splits(X_naive, y_naive, splits_naive, suffix, factory, prefix_naive=True)
     for suffix, factory in LEARNED_CLASSIFIERS:
-        _cv_auc_groups(X_delta, y_delta, groups_delta, suffix, factory, prefix_naive=False)
+        _cv_auc_splits(X_delta, y_delta, splits_delta, suffix, factory, prefix_naive=False)
     return out
 
 
