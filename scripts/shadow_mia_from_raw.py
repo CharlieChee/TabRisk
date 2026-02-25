@@ -3,9 +3,9 @@
 6 组 MIA：2(Naive/Delta) × 3(k-NN/Density/Learned)。k-NN 取 k=1,8,32 为一组。
 
 - k-NN、Density：从原始 synthetic CSV 算（或从已有 pair_metrics 读入时 learned 才可用）。
-- Learned：用 pair_metrics 的 FEATURE_CANDIDATES 训练多种分类器（LR / RF / GB），若 pair_metrics 不存在则先跑 pipeline。
+- Learned：用 pair_metrics 的 FEATURE_CANDIDATES 训练 LR，若 pair_metrics 不存在则先跑 pipeline。
 
-输出：6 组 AUC（Naive k-NN, Naive density, Naive learned×3 分类器, Delta k-NN, Delta density, Delta learned×3 分类器）。
+输出：6 组 AUC（Naive k-NN, Naive density, Naive learned(lr), Delta k-NN, Delta density, Delta learned(lr)）。
 """
 
 from __future__ import annotations
@@ -19,7 +19,6 @@ from typing import Any, Callable, Dict, List, Optional, Tuple
 
 import numpy as np
 import pandas as pd
-from sklearn.ensemble import GradientBoostingClassifier, RandomForestClassifier
 from sklearn.linear_model import LogisticRegression
 from sklearn.metrics import roc_auc_score
 from sklearn.model_selection import GroupKFold, cross_validate
@@ -29,8 +28,6 @@ from sklearn.preprocessing import StandardScaler
 # Learned 攻击器：名称后缀 -> 无参构造器（每次 CV 新建实例）
 LEARNED_CLASSIFIERS: List[Tuple[str, Callable[[], Any]]] = [
     ("lr", lambda: LogisticRegression(max_iter=1000, random_state=42)),
-    ("rf", lambda: RandomForestClassifier(n_estimators=100, max_depth=10, random_state=42)),
-    ("gb", lambda: GradientBoostingClassifier(n_estimators=100, max_depth=4, random_state=42)),
 ]
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
@@ -620,14 +617,14 @@ def main() -> int:
         return 1
 
     learned_suffixes = [s for s, _ in LEARNED_CLASSIFIERS]
-    print("AUC (6 组: Naive/Delta × k-NN(k=1,8,32)/density/learned(lr,rf,gb)):")
+    print("AUC (6 组: Naive/Delta × k-NN(k=1,8,32)/density/learned(lr)):")
     groups = [
         ("1. Naive k-NN (k=1,8,32)", [f"auc_naive_knn_k{k}" for k in KNN_K_LIST]),
         ("2. Naive density", ["auc_naive_density"]),
-        ("3. Naive learned (lr,rf,gb)", [f"auc_naive_learned_{s}" for s in learned_suffixes]),
+        ("3. Naive learned (lr)", [f"auc_naive_learned_{s}" for s in learned_suffixes]),
         ("4. Delta k-NN (k=1,8,32)", [f"auc_delta_knn_k{k}" for k in KNN_K_LIST]),
         ("5. Delta density", ["auc_delta_density"]),
-        ("6. Delta learned (lr,rf,gb)", [f"auc_delta_learned_{s}" for s in learned_suffixes]),
+        ("6. Delta learned (lr)", [f"auc_delta_learned_{s}" for s in learned_suffixes]),
     ]
     for label, keys in groups:
         vals = [result.get(k, float("nan")) for k in keys]
