@@ -154,6 +154,14 @@ python scripts/demo_auc_vs_rounds.py --dataset adult_openml --model ctgan --base
 # 后台：nohup python scripts/demo_auc_vs_rounds.py --dataset adult_openml --model ctgan --n-jobs 64 > demo_auc_vs_rounds.log 2>&1 &
 
 
+# ---------- Naive vs Delta 直观展示（单 run：AUC 对比柱状图 + 分数分布图） ----------
+# 展示差分（Delta）相对 Naive 的优越性：图1 三组攻击的 Naive/Delta AUC 柱状图；图2 分数分布（Naive 重叠 vs Delta 以 0 分离）
+# 产出：run_dir/demo_naive_vs_delta/auc_naive_vs_delta.png, score_distributions.png, mia_auc.csv, per_pair_scores.csv
+python scripts/demo_naive_vs_delta.py --run-dir "outputs/train_adult_openml_preprocess_monotonic_train1000_synth1000_ctgan_1000iter_bs256_rounds20_candidate100_control_seed42_20260220_234247" --n-jobs 4
+# 指定输出目录：--outdir scripts/demo_naive_vs_delta_output
+# 分布图用 Density 分数：--use-density
+
+
 # ---------- AUC / Stability 汇总与成图（基于已跑完的 control run） ----------
 # 在 outputs/ 下扫描所有带 control 的 run，用 pair_metrics + control + mmd_component_analysis 算 AUC/adv_auc 与 stability，出表出图
 python scripts/make_auc_stability_figs.py --outputs outputs --outdir outputs/figures

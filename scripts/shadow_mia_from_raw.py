@@ -483,11 +483,13 @@ def _compute_learned_aucs(run_dir: Path, cv: int = 5, random_state: int = 42) ->
     return out
 
 
-def _run_one_run(run_dir: Path, n_jobs: int = 1) -> Dict[str, float]:
+def _run_one_run(
+    run_dir: Path, n_jobs: int = 1, export_scores_path: Optional[Path] = None
+) -> Dict[str, float]:
     """
     对单个 run_dir 计算 4 类方法的 AUC（k-NN 含 k=1,8,32）。
-    返回 dict: auc_naive_knn_k1, auc_naive_knn_k8, auc_naive_knn_k32, auc_naive_density,
-               auc_delta_knn_k1, auc_delta_knn_k8, auc_delta_knn_k32, auc_delta_density。
+    若 export_scores_path 指定，则写入每个 (target_idx, round) 的 Naive/Delta 分数供画图用。
+    返回 dict: auc_naive_knn_k1, ...
     """
     run_dir = Path(run_dir).resolve()
     candidate_path = run_dir / "candidate.csv"
@@ -507,7 +509,9 @@ def _run_one_run(run_dir: Path, n_jobs: int = 1) -> Dict[str, float]:
     delta_density_scores: List[float] = []
     delta_density_labels: List[int] = []
 
-    def _process_one(res: Optional[Dict[str, Any]]) -> None:
+    export_rows: List[Dict[str, Any]] = []
+
+    def _process_one(res: Optional[Dict[str, Any]], ti: Optional[int] = None, rk: Optional[int] = None) -> None:
         if res is None:
             return
         for k in KNN_K_LIST:
@@ -538,11 +542,23 @@ def _run_one_run(run_dir: Path, n_jobs: int = 1) -> Dict[str, float]:
             delta_density_labels.append(1)
             delta_density_scores.append(-delta_d)
             delta_density_labels.append(0)
+        if export_scores_path is not None and ti is not None and rk is not None:
+            s_m8, s_c8 = res["naive_knn"].get(8, (float("nan"), float("nan")))
+            export_rows.append({
+                "target_idx": ti,
+                "round": rk,
+                "naive_knn_k8_member": s_m8,
+                "naive_knn_k8_control": s_c8,
+                "delta_knn_k8": res["delta_knn"].get(8, float("nan")),
+                "naive_density_member": res["naive_density"][0],
+                "naive_density_control": res["naive_density"][1],
+                "delta_density": res["delta_density"],
+            })
 
     if n_jobs <= 1:
         for ti, rk, in_p, out_p, c_in_p, c_out_p in path_list:
             res = _worker_one_pair(run_dir_str, ti, rk, in_p, out_p, c_in_p, c_out_p)
-            _process_one(res)
+            _process_one(res, ti, rk)
     else:
         with ProcessPoolExecutor(max_workers=n_jobs) as ex:
             futures = {
@@ -550,7 +566,8 @@ def _run_one_run(run_dir: Path, n_jobs: int = 1) -> Dict[str, float]:
                 for ti, rk, in_p, out_p, c_in_p, c_out_p in path_list
             }
             for fut in as_completed(futures):
-                _process_one(fut.result())
+                ti, rk = futures[fut]
+                _process_one(fut.result(), ti, rk)
 
     def _auc(scores: List[float], labels: List[int]) -> float:
         if len(scores) < 2 or len(set(labels)) < 2:
@@ -566,6 +583,11 @@ def _run_one_run(run_dir: Path, n_jobs: int = 1) -> Dict[str, float]:
         out[f"auc_delta_knn_k{k}"] = _auc(delta_knn_scores[k], delta_knn_labels[k])
     out["auc_naive_density"] = _auc(naive_density_scores, naive_density_labels)
     out["auc_delta_density"] = _auc(delta_density_scores, delta_density_labels)
+
+    if export_scores_path and export_rows:
+        export_scores_path = Path(export_scores_path)
+        export_scores_path.parent.mkdir(parents=True, exist_ok=True)
+        pd.DataFrame(export_rows).to_csv(export_scores_path, index=False)
 
     # Learned：若 pair_metrics 不存在则先跑 pipeline，再算 Naive/Delta × 多分类器 AUC
     learned_suffixes = [s for s, _ in LEARNED_CLASSIFIERS]
@@ -602,6 +624,12 @@ def main() -> int:
         default=1,
         help="并行进程数（默认 1）；例如 32 则用 32 进程处理 (target, round) 对",
     )
+    parser.add_argument(
+        "--export-scores",
+        type=str,
+        default=None,
+        help="可选：导出每个 (target, round) 的 Naive/Delta 分数到 CSV，供 demo 画分布图",
+    )
     args = parser.parse_args()
 
     run_dir = Path(args.run_dir)
@@ -611,7 +639,8 @@ def main() -> int:
         print(f"错误: run_dir 不存在: {run_dir}", file=sys.stderr)
         return 1
 
-    result = _run_one_run(run_dir, n_jobs=args.n_jobs)
+    export_path = Path(args.export_scores) if args.export_scores else None
+    result = _run_one_run(run_dir, n_jobs=args.n_jobs, export_scores_path=export_path)
     if not result:
         print("未找到有效的 (target, round) 配对（需同时有 member in/out 与 control in/out）", file=sys.stderr)
         return 1
