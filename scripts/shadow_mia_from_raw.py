@@ -1,22 +1,18 @@
 #!/usr/bin/env python3
 """
-仅用影子模型原始合成数据（无 pair_metrics）做 4 种 MIA：2(Naive/Delta) × 2(k-NN/Density)。
+6 组 MIA：2(Naive/Delta) × 3(k-NN/Density/Learned)。k-NN 取 k=1,8,32 为一组。
 
-思路：
-- Naive：不用 control 数据参与**算分**；member/control 两组各自用本组 in/out 算分，用两组得分+标签算 AUC。
-- Delta：差分信号。同一 (target, round) 上 member 信号 - control 信号，减去「N-1 伴随集带来的基线」；
-  member 行得分 = member_signal - control_signal，control 行得分 = control_signal - member_signal，再算 AUC。
-- k-NN：target 到 in 集 / out 集的最近 k 条距离的平均（k=1,8,32）；得分用 in/out 对比（见下）。
-- Density：DOMIAS 思路，用 k-NN 密度估计（合成集在 target 处的密度），再 in vs out 比。
+- k-NN、Density：从原始 synthetic CSV 算（或从已有 pair_metrics 读入时 learned 才可用）。
+- Learned：用 pair_metrics 的 FEATURE_CANDIDATES 训练 LR。若 pair_metrics.csv / pair_metrics_control.csv
+  不存在则先调用 run_shadow_metrics_pipeline 生成。
 
-用法：
-  python scripts/shadow_mia_from_raw.py --run-dir outputs/train_adult_..._control_seed42_20260221_030832
-  输出：4 类 AUC（Naive k-NN k=1/8/32, Naive density, Delta k-NN k=1/8/32, Delta density）。
+输出：6 组 AUC（Naive k-NN k=1/8/32, Naive density, Naive learned, Delta k-NN k=1/8/32, Delta density, Delta learned）。
 """
 
 from __future__ import annotations
 
 import argparse
+import subprocess
 import sys
 from concurrent.futures import ProcessPoolExecutor, as_completed
 from pathlib import Path
@@ -24,7 +20,10 @@ from typing import Any, Dict, List, Optional, Tuple
 
 import numpy as np
 import pandas as pd
+from sklearn.linear_model import LogisticRegression
 from sklearn.metrics import roc_auc_score
+from sklearn.model_selection import cross_validate
+from sklearn.preprocessing import StandardScaler
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 SCRIPT_DIR = Path(__file__).resolve().parent
@@ -76,6 +75,13 @@ def _get_round_files_member(target_dir: Path) -> List[Tuple[int, Path, Path]]:
 EPS = 1e-12
 KNN_K_LIST = [1, 8, 32]
 DENSITY_K = 8  # DOMIAS-like 密度估计用的 k
+
+# Learned attacker 与 four_attack_methods 一致的特征列（来自 pair_metrics）
+FEATURE_CANDIDATES = [
+    "mmd_numeric", "mmd_mixed", "min_dist_in", "min_dist_out", "delta_min_dist",
+    "num_mean_diff_mean", "num_mean_diff_max", "num_std_diff_mean", "num_std_diff_max",
+    "cat_tv_mean", "cat_tv_max",
+]
 
 
 def _mixed_type_distances(
@@ -335,6 +341,100 @@ def _worker_one_pair(
     }
 
 
+def _ensure_pair_metrics(run_dir: Path, n_jobs: int = 4) -> bool:
+    """若 run_dir/shadow_pair_metrics 下缺少 pair_metrics.csv 或 pair_metrics_control.csv，则调用 pipeline 生成。"""
+    metrics_dir = run_dir / "shadow_pair_metrics"
+    pair_path = metrics_dir / "pair_metrics.csv"
+    control_path = metrics_dir / "pair_metrics_control.csv"
+    if pair_path.exists() and control_path.exists():
+        return True
+    pipeline = PROJECT_ROOT / "scripts" / "run_shadow_metrics_pipeline.py"
+    if not pipeline.exists():
+        return False
+    cmd = [
+        sys.executable,
+        str(pipeline),
+        "--run-dir", str(run_dir),
+        "--n-jobs", str(max(1, n_jobs)),
+    ]
+    ret = subprocess.run(cmd, cwd=str(PROJECT_ROOT), capture_output=True, text=True, timeout=3600)
+    if ret.returncode != 0:
+        return False
+    return pair_path.exists() and control_path.exists()
+
+
+def _compute_learned_aucs(run_dir: Path, cv: int = 5) -> Dict[str, float]:
+    """
+    从 pair_metrics.csv / pair_metrics_control.csv 计算 Naive+Learned 与 Delta+Learned 的 AUC。
+    使用 FEATURE_CANDIDATES，LR 5-fold CV。返回 auc_naive_learned, auc_delta_learned。
+    """
+    out: Dict[str, float] = {}
+    pair_path = run_dir / "shadow_pair_metrics" / "pair_metrics.csv"
+    control_path = run_dir / "shadow_pair_metrics" / "pair_metrics_control.csv"
+    if not pair_path.exists() or not control_path.exists():
+        return out
+    df_m = pd.read_csv(pair_path)
+    df_c = pd.read_csv(control_path)
+    if df_m.empty or df_c.empty:
+        return out
+    common = set(df_m.select_dtypes(include=[np.number]).columns) & set(df_c.select_dtypes(include=[np.number]).columns)
+    common -= {"target_idx", "round"}
+    feature_cols = [x for x in FEATURE_CANDIDATES if x in common] or sorted(common)
+    if not feature_cols:
+        return out
+
+    # Naive: member 行 vs control 行，每行用本行特征
+    Xm = df_m[feature_cols].replace([np.inf, -np.inf], np.nan).fillna(0).to_numpy()
+    Xc = df_c[feature_cols].replace([np.inf, -np.inf], np.nan).fillna(0).to_numpy()
+    X_naive = np.vstack([Xm, Xc])
+    y_naive = np.concatenate([np.ones(len(Xm)), np.zeros(len(Xc))])
+    if len(y_naive) >= cv * 2 and len(set(y_naive)) == 2:
+        X_naive = StandardScaler().fit_transform(X_naive)
+        clf = LogisticRegression(max_iter=1000, random_state=42)
+        res = cross_validate(clf, X_naive, y_naive, cv=min(cv, len(y_naive) // 2), scoring="roc_auc", return_train_score=False)
+        out["auc_naive_learned"] = max(float(np.mean(res["test_score"])), 1.0 - float(np.mean(res["test_score"])))
+    else:
+        out["auc_naive_learned"] = float("nan")
+
+    # Delta: 按 (target_idx, round) 对齐，delta_vec = member - control，每对贡献 (delta, 1) 与 (-delta, 0)
+    id_cols = [c for c in ["target_idx", "round"] if c in df_m.columns and c in df_c.columns]
+    if not id_cols:
+        out["auc_delta_learned"] = float("nan")
+        return out
+    merged = df_m.merge(
+        df_c,
+        on=id_cols,
+        how="inner",
+        suffixes=("_m", "_c"),
+    )
+    if merged.empty:
+        out["auc_delta_learned"] = float("nan")
+        return out
+    feat_m = [c for c in merged.columns if c.endswith("_m") and c.replace("_m", "") in feature_cols]
+    feat_c = [c.replace("_m", "_c") for c in feat_m]
+    base = [c.replace("_m", "") for c in feat_m]
+    if len(base) != len(feature_cols):
+        base = feature_cols
+        feat_m = [f"{c}_m" for c in feature_cols if f"{c}_m" in merged.columns]
+        feat_c = [f"{c}_c" for c in feature_cols if f"{c}_c" in merged.columns]
+    if not feat_m or not feat_c:
+        out["auc_delta_learned"] = float("nan")
+        return out
+    M = merged[feat_m].replace([np.inf, -np.inf], np.nan).fillna(0).to_numpy()
+    C = merged[feat_c].replace([np.inf, -np.inf], np.nan).fillna(0).to_numpy()
+    delta = M - C
+    X_delta = np.vstack([delta, -delta])
+    y_delta = np.concatenate([np.ones(len(delta)), np.zeros(len(delta))])
+    if len(y_delta) >= cv * 2 and len(set(y_delta)) == 2:
+        X_delta = StandardScaler().fit_transform(X_delta)
+        clf = LogisticRegression(max_iter=1000, random_state=42)
+        res = cross_validate(clf, X_delta, y_delta, cv=min(cv, len(y_delta) // 2), scoring="roc_auc", return_train_score=False)
+        out["auc_delta_learned"] = max(float(np.mean(res["test_score"])), 1.0 - float(np.mean(res["test_score"])))
+    else:
+        out["auc_delta_learned"] = float("nan")
+    return out
+
+
 def _run_one_run(run_dir: Path, n_jobs: int = 1) -> Dict[str, float]:
     """
     对单个 run_dir 计算 4 类方法的 AUC（k-NN 含 k=1,8,32）。
@@ -418,6 +518,16 @@ def _run_one_run(run_dir: Path, n_jobs: int = 1) -> Dict[str, float]:
         out[f"auc_delta_knn_k{k}"] = _auc(delta_knn_scores[k], delta_knn_labels[k])
     out["auc_naive_density"] = _auc(naive_density_scores, naive_density_labels)
     out["auc_delta_density"] = _auc(delta_density_scores, delta_density_labels)
+
+    # Learned：若 pair_metrics 不存在则先跑 pipeline，再算 Naive/Delta Learned AUC
+    if _ensure_pair_metrics(run_dir, n_jobs=n_jobs):
+        learned = _compute_learned_aucs(run_dir, cv=5)
+        out["auc_naive_learned"] = learned.get("auc_naive_learned", float("nan"))
+        out["auc_delta_learned"] = learned.get("auc_delta_learned", float("nan"))
+    else:
+        out["auc_naive_learned"] = float("nan")
+        out["auc_delta_learned"] = float("nan")
+
     return out
 
 
@@ -457,9 +567,21 @@ def main() -> int:
         print("未找到有效的 (target, round) 配对（需同时有 member in/out 与 control in/out）", file=sys.stderr)
         return 1
 
-    print("AUC (4 类方法, k-NN 取 k=1,8,32):")
+    print("AUC (6 组: Naive/Delta × k-NN(k=1,8,32)/density/learned):")
+    groups = [
+        ("1. Naive k-NN (k=1,8,32)", [f"auc_naive_knn_k{k}" for k in KNN_K_LIST]),
+        ("2. Naive density", ["auc_naive_density"]),
+        ("3. Naive learned", ["auc_naive_learned"]),
+        ("4. Delta k-NN (k=1,8,32)", [f"auc_delta_knn_k{k}" for k in KNN_K_LIST]),
+        ("5. Delta density", ["auc_delta_density"]),
+        ("6. Delta learned", ["auc_delta_learned"]),
+    ]
+    for label, keys in groups:
+        vals = [result.get(k, float("nan")) for k in keys]
+        print(f"  {label}: " + ", ".join(f"{v:.4f}" for v in vals))
+    print("  (逐键):")
     for key in sorted(result.keys()):
-        print(f"  {key}: {result[key]:.4f}")
+        print(f"    {key}: {result[key]:.4f}")
 
     if args.output:
         out_path = Path(args.output)
