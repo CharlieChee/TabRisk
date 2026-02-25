@@ -18,8 +18,9 @@ from __future__ import annotations
 
 import argparse
 import sys
+from concurrent.futures import ProcessPoolExecutor, as_completed
 from pathlib import Path
-from typing import Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional, Tuple
 
 import numpy as np
 import pandas as pd
@@ -241,7 +242,100 @@ def _collect_paired_rows(
     return pairs, columns_order
 
 
-def _run_one_run(run_dir: Path) -> Dict[str, float]:
+def _collect_paired_paths(run_dir: Path) -> List[Tuple[int, int, str, str, str, str]]:
+    """仅收集 (target_idx, round_k, in_path, out_path, c_in_path, c_out_path) 路径，供多进程 worker 用。"""
+    shadow_dir = run_dir / "shadow"
+    if not shadow_dir.exists():
+        return []
+    target_indices = []
+    for d in sorted(shadow_dir.iterdir(), key=lambda x: x.name):
+        if not d.is_dir() or not d.name.startswith("target_"):
+            continue
+        suffix = d.name[7:]
+        if suffix.isdigit():
+            target_indices.append(int(suffix))
+    out: List[Tuple[int, int, str, str, str, str]] = []
+    for ti in target_indices:
+        target_dir = shadow_dir / f"target_{ti}"
+        member_rounds = _get_round_files_member(target_dir)
+        control_rounds = _get_round_files_control(target_dir)
+        if not member_rounds or not control_rounds:
+            continue
+        control_round_map = {r[0]: (r[1], r[2]) for r in control_rounds}
+        for round_k, in_path, out_path in member_rounds:
+            if round_k not in control_round_map:
+                continue
+            c_in_path, c_out_path = control_round_map[round_k]
+            out.append((ti, round_k, str(in_path), str(out_path), str(c_in_path), str(c_out_path)))
+    return out
+
+
+def _worker_one_pair(
+    run_dir_str: str,
+    target_idx: int,
+    round_k: int,
+    in_path: str,
+    out_path: str,
+    c_in_path: str,
+    c_out_path: str,
+) -> Optional[Dict[str, Any]]:
+    """
+    单 (target, round) 的 worker：读入数据并算 Naive/Delta 的 k-NN 与 density 分数。
+    返回 dict: naive_knn {k: (s_m, s_c)}, naive_density (s_m, s_c), delta_knn {k: delta}, delta_density delta。
+    """
+    run_dir = Path(run_dir_str)
+    candidate_df = pd.read_csv(run_dir / "candidate.csv")
+    try:
+        target_row = _load_target_row(run_dir, target_idx, candidate_df)
+    except Exception:
+        return None
+    in_df = pd.read_csv(in_path)
+    out_df = pd.read_csv(out_path)
+    out_df = out_df[in_df.columns]
+    c_in_df = pd.read_csv(c_in_path)
+    c_out_df = pd.read_csv(c_out_path)
+    c_out_df = c_out_df[c_in_df.columns]
+    if in_df.empty or out_df.empty or c_in_df.empty or c_out_df.empty:
+        return None
+    num_cols, cat_cols = _split_numeric_categorical(in_df)
+    all_num = pd.concat([in_df[num_cols], out_df[num_cols]], axis=0, ignore_index=True).astype(float) if num_cols else None
+    joint_mu = all_num.mean() if all_num is not None and len(all_num) else None
+    joint_sigma = all_num.std(ddof=0).replace(0.0, 1.0) if all_num is not None and len(all_num) else None
+    knn_m, dens_m = _compute_scores_one_row(
+        target_row, in_df, out_df, num_cols, cat_cols, joint_mu, joint_sigma
+    )
+    all_num_c = pd.concat([c_in_df[num_cols], c_out_df[num_cols]], axis=0, ignore_index=True).astype(float) if num_cols else None
+    mu_c = all_num_c.mean() if all_num_c is not None and len(all_num_c) else None
+    sigma_c = all_num_c.std(ddof=0).replace(0.0, 1.0) if all_num_c is not None and len(all_num_c) else None
+    knn_c, dens_c = _compute_scores_one_row(
+        target_row, c_in_df, c_out_df, num_cols, cat_cols, mu_c, sigma_c
+    )
+    naive_knn = {}
+    for k in KNN_K_LIST:
+        s_m = _naive_score_knn(knn_m["in"][k], knn_m["out"][k])
+        s_c = _naive_score_knn(knn_c["in"][k], knn_c["out"][k])
+        naive_knn[k] = (s_m, s_c)
+    naive_density = (
+        _naive_score_density(dens_m["log_density_in"], dens_m["log_density_out"]),
+        _naive_score_density(dens_c["log_density_in"], dens_c["log_density_out"]),
+    )
+    delta_knn = {}
+    for k in KNN_K_LIST:
+        sig_m = _naive_score_knn(knn_m["in"][k], knn_m["out"][k])
+        sig_c = _naive_score_knn(knn_c["in"][k], knn_c["out"][k])
+        delta_knn[k] = (sig_m - sig_c) if np.isfinite(sig_m) and np.isfinite(sig_c) else float("nan")
+    d_m = _naive_score_density(dens_m["log_density_in"], dens_m["log_density_out"])
+    d_c = _naive_score_density(dens_c["log_density_in"], dens_c["log_density_out"])
+    delta_density = (d_m - d_c) if np.isfinite(d_m) and np.isfinite(d_c) else float("nan")
+    return {
+        "naive_knn": naive_knn,
+        "naive_density": naive_density,
+        "delta_knn": delta_knn,
+        "delta_density": delta_density,
+    }
+
+
+def _run_one_run(run_dir: Path, n_jobs: int = 1) -> Dict[str, float]:
     """
     对单个 run_dir 计算 4 类方法的 AUC（k-NN 含 k=1,8,32）。
     返回 dict: auc_naive_knn_k1, auc_naive_knn_k8, auc_naive_knn_k32, auc_naive_density,
@@ -251,79 +345,64 @@ def _run_one_run(run_dir: Path) -> Dict[str, float]:
     candidate_path = run_dir / "candidate.csv"
     if not candidate_path.exists():
         return {}
-    candidate_df = pd.read_csv(candidate_path)
-
-    pairs, _ = _collect_paired_rows(run_dir, candidate_df)
-    if not pairs:
+    run_dir_str = str(run_dir)
+    path_list = _collect_paired_paths(run_dir)
+    if not path_list:
         return {}
 
-    # 为 Naive 准备：每个 (target, round) 有 member 一行、control 一行，用「本行 in/out」算分
     naive_knn_scores: Dict[int, List[float]] = {k: [] for k in KNN_K_LIST}
     naive_knn_labels: Dict[int, List[int]] = {k: [] for k in KNN_K_LIST}
     naive_density_scores: List[float] = []
     naive_density_labels: List[int] = []
-
     delta_knn_scores: Dict[int, List[float]] = {k: [] for k in KNN_K_LIST}
     delta_knn_labels: Dict[int, List[int]] = {k: [] for k in KNN_K_LIST}
     delta_density_scores: List[float] = []
     delta_density_labels: List[int] = []
 
-    for target_idx, round_k, target_row, in_df, out_df, c_in_df, c_out_df in pairs:
-        num_cols, cat_cols = _split_numeric_categorical(in_df)
-        # 联合标准化：member 用 in+out，control 用 c_in+c_out；为 delta 对齐用同一套特征
-        all_num = pd.concat([in_df[num_cols], out_df[num_cols]], axis=0, ignore_index=True).astype(float) if num_cols else None
-        joint_mu = all_num.mean() if all_num is not None and len(all_num) else None
-        joint_sigma = all_num.std(ddof=0).replace(0.0, 1.0) if all_num is not None and len(all_num) else None
-
-        # Member 行：用 (in_df, out_df) 算分
-        knn_m, dens_m = _compute_scores_one_row(
-            target_row, in_df, out_df, num_cols, cat_cols, joint_mu, joint_sigma
-        )
-        # Control 行：用 (c_in_df, c_out_df) 算分，用 control 自己的联合统计
-        all_num_c = pd.concat([c_in_df[num_cols], c_out_df[num_cols]], axis=0, ignore_index=True).astype(float) if num_cols else None
-        mu_c = all_num_c.mean() if all_num_c is not None and len(all_num_c) else None
-        sigma_c = all_num_c.std(ddof=0).replace(0.0, 1.0) if all_num_c is not None and len(all_num_c) else None
-        knn_c, dens_c = _compute_scores_one_row(
-            target_row, c_in_df, c_out_df, num_cols, cat_cols, mu_c, sigma_c
-        )
-
-        # Naive：member 得分、control 得分，不混用对方数据
+    def _process_one(res: Optional[Dict[str, Any]]) -> None:
+        if res is None:
+            return
         for k in KNN_K_LIST:
-            s_m = _naive_score_knn(knn_m["in"][k], knn_m["out"][k])
-            s_c = _naive_score_knn(knn_c["in"][k], knn_c["out"][k])
+            s_m, s_c = res["naive_knn"][k]
             if np.isfinite(s_m):
                 naive_knn_scores[k].append(s_m)
                 naive_knn_labels[k].append(1)
             if np.isfinite(s_c):
                 naive_knn_scores[k].append(s_c)
                 naive_knn_labels[k].append(0)
-        sd_m = _naive_score_density(dens_m["log_density_in"], dens_m["log_density_out"])
-        sd_c = _naive_score_density(dens_c["log_density_in"], dens_c["log_density_out"])
+        sd_m, sd_c = res["naive_density"]
         if np.isfinite(sd_m):
             naive_density_scores.append(sd_m)
             naive_density_labels.append(1)
         if np.isfinite(sd_c):
             naive_density_scores.append(sd_c)
             naive_density_labels.append(0)
-
-        # Delta：差分 = member_signal - control_signal；member 行得 delta，control 行得 -delta
         for k in KNN_K_LIST:
-            sig_m = _naive_score_knn(knn_m["in"][k], knn_m["out"][k])
-            sig_c = _naive_score_knn(knn_c["in"][k], knn_c["out"][k])
-            delta = sig_m - sig_c if np.isfinite(sig_m) and np.isfinite(sig_c) else float("nan")
+            delta = res["delta_knn"][k]
             if np.isfinite(delta):
                 delta_knn_scores[k].append(delta)
                 delta_knn_labels[k].append(1)
                 delta_knn_scores[k].append(-delta)
                 delta_knn_labels[k].append(0)
-        d_m = _naive_score_density(dens_m["log_density_in"], dens_m["log_density_out"])
-        d_c = _naive_score_density(dens_c["log_density_in"], dens_c["log_density_out"])
-        delta_d = d_m - d_c if np.isfinite(d_m) and np.isfinite(d_c) else float("nan")
+        delta_d = res["delta_density"]
         if np.isfinite(delta_d):
             delta_density_scores.append(delta_d)
             delta_density_labels.append(1)
             delta_density_scores.append(-delta_d)
             delta_density_labels.append(0)
+
+    if n_jobs <= 1:
+        for ti, rk, in_p, out_p, c_in_p, c_out_p in path_list:
+            res = _worker_one_pair(run_dir_str, ti, rk, in_p, out_p, c_in_p, c_out_p)
+            _process_one(res)
+    else:
+        with ProcessPoolExecutor(max_workers=n_jobs) as ex:
+            futures = {
+                ex.submit(_worker_one_pair, run_dir_str, ti, rk, in_p, out_p, c_in_p, c_out_p): (ti, rk)
+                for ti, rk, in_p, out_p, c_in_p, c_out_p in path_list
+            }
+            for fut in as_completed(futures):
+                _process_one(fut.result())
 
     def _auc(scores: List[float], labels: List[int]) -> float:
         if len(scores) < 2 or len(set(labels)) < 2:
@@ -358,6 +437,12 @@ def main() -> int:
         default=None,
         help="可选：输出 CSV 路径；不指定则只打印",
     )
+    parser.add_argument(
+        "--n-jobs",
+        type=int,
+        default=1,
+        help="并行进程数（默认 1）；例如 32 则用 32 进程处理 (target, round) 对",
+    )
     args = parser.parse_args()
 
     run_dir = Path(args.run_dir)
@@ -367,7 +452,7 @@ def main() -> int:
         print(f"错误: run_dir 不存在: {run_dir}", file=sys.stderr)
         return 1
 
-    result = _run_one_run(run_dir)
+    result = _run_one_run(run_dir, n_jobs=args.n_jobs)
     if not result:
         print("未找到有效的 (target, round) 配对（需同时有 member in/out 与 control in/out）", file=sys.stderr)
         return 1

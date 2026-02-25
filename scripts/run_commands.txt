@@ -231,8 +231,8 @@ python scripts/adult_ctgan_statistical_analysis.py --summary outputs/postprocess
 # 2(Naive/Delta) × 2(k-NN/Density)：Naive=不用 control 参与算分，Delta=减去 control 基线得差分信号；
 # k-NN 取 k=1,8,32（最近 k 条距离的平均），Density=DOMIAS 式 k-NN 密度 log(d_in)-log(d_out)。
 # 输出：auc_naive_knn_k1/k8/k32, auc_naive_density, auc_delta_knn_k1/k8/k32, auc_delta_density。
-# python scripts/shadow_mia_from_raw.py --run-dir outputs/train_adult_..._control_seed42_20260221_030832
-# python scripts/shadow_mia_from_raw.py --run-dir outputs/<run_dir> --output outputs/mia_from_raw_result.csv
+# python scripts/shadow_mia_from_raw.py --run-dir outputs/train_adult_..._control_seed42_20260221_030832 --n-jobs 32
+# python scripts/shadow_mia_from_raw.py --run-dir outputs/<run_dir> --output outputs/mia_from_raw_result.csv --n-jobs 32
 
 # ========== 实验流程与当前工作（第一人称简述） ==========
 #
