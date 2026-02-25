@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """
-Demo: 对 outputs/ 下 adult_openml + 指定模型(ctgan/ddpm) + rounds=20 的 run（train=200,500,1000,1500,2000 × 5 seeds）
+Demo: 对 outputs/ 下 指定数据集 + 指定模型(ctgan/ddpm) + rounds=20 的 run（train=200,500,1000,1500,2000 × 5 seeds）
 执行 shadow_mia_from_raw.py，汇总 AUC，并画图：横轴 train_size，纵轴 AUC，Naive & Delta 各方法带方差柱。
-用法: --model ctgan 或 --model ddpm
+用法: --dataset bank --model ctgan 或 --dataset adult_openml --model ddpm
 """
 
 from __future__ import annotations
@@ -27,17 +27,17 @@ TRAIN_PATTERN = re.compile(r"train(\d+)(?:_|$)")
 SEED_PATTERN = re.compile(r"seed(\d+)(?:_|$)")
 
 
-def get_model_paths(model: str) -> tuple[Path, Path, Path]:
-    """返回 (results_dir, combined_csv, fig_path) 用于指定 model。"""
-    results_dir = RESULTS_BASE / model
+def get_model_paths(dataset: str, model: str) -> tuple[Path, Path, Path]:
+    """返回 (results_dir, combined_csv, fig_path) 用于指定 dataset + model。"""
+    results_dir = RESULTS_BASE / f"{dataset}_{model}"
     return results_dir, results_dir / "all_runs.csv", results_dir / "auc_vs_trainsize.png"
 
 
-def find_run_dirs(model: str) -> list[tuple[Path, int, int]]:
-    """返回 [(run_dir, train_size, seed), ...]，筛选 adult_openml + model + rounds20。"""
+def find_run_dirs(dataset: str, model: str) -> list[tuple[Path, int, int]]:
+    """返回 [(run_dir, train_size, seed), ...]，筛选 dataset + model + rounds20。"""
     if not OUTPUTS_DIR.exists():
         return []
-    required = ["adult_openml", model, "rounds20"]
+    required = [dataset, model, "rounds20"]
     out: list[tuple[Path, int, int]] = []
     for d in OUTPUTS_DIR.iterdir():
         if not d.is_dir():
@@ -104,7 +104,7 @@ def load_and_aggregate(results_dir: Path, combined_csv: Path) -> pd.DataFrame:
     return pd.concat(rows, ignore_index=True)
 
 
-def plot_auc_vs_trainsize(df: pd.DataFrame, fig_path: Path, model: str) -> None:
+def plot_auc_vs_trainsize(df: pd.DataFrame, fig_path: Path, dataset: str, model: str) -> None:
     """横轴 train_size，纵轴 AUC；每条线一个方法，带均值±std 的 error bar。"""
     if df.empty:
         raise SystemExit("无数据可画图")
@@ -154,7 +154,7 @@ def plot_auc_vs_trainsize(df: pd.DataFrame, fig_path: Path, model: str) -> None:
     ax.set_ylabel("AUC")
     ax.set_xticks(train_sizes)
     ax.legend(loc="best", ncol=2, fontsize=8)
-    ax.set_title(f"MIA AUC vs train size (adult_openml, {model.upper()}, rounds=20; Naive & Delta; mean ± std over 5 seeds)")
+    ax.set_title(f"MIA AUC vs train size ({dataset}, {model.upper()}, rounds=20; Naive & Delta; mean ± std over 5 seeds)")
     ax.set_ylim(0.45, 1.0)
     ax.axhline(0.5, color="gray", linestyle="--", alpha=0.7)
     ax.grid(True, alpha=0.3)
@@ -168,19 +168,21 @@ def plot_auc_vs_trainsize(df: pd.DataFrame, fig_path: Path, model: str) -> None:
 def main() -> int:
     import argparse
     parser = argparse.ArgumentParser(
-        description="Run MIA on adult_openml + model(ctgan/ddpm) + rounds20 runs and plot AUC vs train_size."
+        description="Run MIA on dataset + model(ctgan/ddpm) + rounds20 runs and plot AUC vs train_size."
     )
+    parser.add_argument("--dataset", type=str, default="bank", help="数据集名，如 bank, adult_openml（需与 outputs 下目录名一致）")
     parser.add_argument("--model", type=str, required=True, choices=["ctgan", "ddpm"], help="合成模型: ctgan 或 ddpm")
     parser.add_argument("--skip-run", action="store_true", help="不执行 MIA，仅用已有 CSV 画图")
     parser.add_argument("--n-jobs", type=int, default=4, help="MIA 并行进程数")
     args = parser.parse_args()
 
+    dataset = args.dataset
     model = args.model
-    results_dir, combined_csv, fig_path = get_model_paths(model)
-    runs = find_run_dirs(model)
-    print(f"[{model}] 找到 {len(runs)} 个 run 目录 (train_size × seed)")
+    results_dir, combined_csv, fig_path = get_model_paths(dataset, model)
+    runs = find_run_dirs(dataset, model)
+    print(f"[{dataset}, {model}] 找到 {len(runs)} 个 run 目录 (train_size × seed)")
     if not runs:
-        print(f"未找到符合条件目录 (adult_openml, {model}, rounds20, train in {TRAIN_SIZES})", file=sys.stderr)
+        print(f"未找到符合条件目录 ({dataset}, {model}, rounds20, train in {TRAIN_SIZES})", file=sys.stderr)
         return 1
 
     from collections import Counter
@@ -209,7 +211,7 @@ def main() -> int:
     if df.empty:
         print("无结果数据，无法画图。请先去掉 --skip-run 运行一次。", file=sys.stderr)
         return 1
-    plot_auc_vs_trainsize(df, fig_path, model)
+    plot_auc_vs_trainsize(df, fig_path, dataset, model)
     return 0
 
 
