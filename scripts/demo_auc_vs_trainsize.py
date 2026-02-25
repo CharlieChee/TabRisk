@@ -108,22 +108,26 @@ def plot_auc_vs_trainsize(df: pd.DataFrame) -> None:
     if not train_sizes:
         raise SystemExit("无 train_size 列或为空")
 
-    # 要画的列：Naive k-NN k=1,8,32, Naive density, Naive learned (lr)
+    # 要画的列：Naive 与 Delta (differential) 各一套；每条 (列, 标签, 颜色, 线型)
     series_config = [
-        ("auc_naive_knn_k1", "k-NN (k=1)", "C0"),
-        ("auc_naive_knn_k8", "k-NN (k=8)", "C1"),
-        ("auc_naive_knn_k32", "k-NN (k=32)", "C2"),
-        ("auc_naive_density", "Density", "C3"),
-        ("auc_naive_learned_lr", "Learned (LR)", "C4"),
+        ("auc_naive_knn_k1", "Naive k-NN (k=1)", "C0", "-"),
+        ("auc_delta_knn_k1", "Delta k-NN (k=1)", "C0", "--"),
+        ("auc_naive_knn_k8", "Naive k-NN (k=8)", "C1", "-"),
+        ("auc_delta_knn_k8", "Delta k-NN (k=8)", "C1", "--"),
+        ("auc_naive_knn_k32", "Naive k-NN (k=32)", "C2", "-"),
+        ("auc_delta_knn_k32", "Delta k-NN (k=32)", "C2", "--"),
+        ("auc_naive_density", "Naive Density", "C3", "-"),
+        ("auc_delta_density", "Delta Density", "C3", "--"),
+        ("auc_naive_learned_lr", "Naive Learned (LR)", "C4", "-"),
+        ("auc_delta_learned_lr", "Delta Learned (LR)", "C4", "--"),
     ]
-    # 确保列存在
-    available = [c for c, _, _ in series_config if c in df.columns]
+    available = [c for c, _, _, _ in series_config if c in df.columns]
     if not available:
         raise SystemExit("DataFrame 中缺少所需的 AUC 列")
 
-    fig, ax = plt.subplots(figsize=(8, 5))
+    fig, ax = plt.subplots(figsize=(10, 6))
     x = np.array(train_sizes)
-    for col, label, color in series_config:
+    for col, label, color, ls in series_config:
         if col not in df.columns:
             continue
         means = []
@@ -138,15 +142,15 @@ def plot_auc_vs_trainsize(df: pd.DataFrame) -> None:
                 stds.append(sub.std() if len(sub) > 1 else 0.0)
         means = np.array(means)
         stds = np.array(stds)
-        ax.plot(x, means, "o-", label=label, color=color)
-        ax.fill_between(x, means - stds, means + stds, color=color, alpha=0.2)
-        ax.errorbar(x, means, yerr=stds, fmt="none", color=color, capsize=3)
+        ax.plot(x, means, "o-", label=label, color=color, linestyle=ls)
+        ax.fill_between(x, means - stds, means + stds, color=color, alpha=0.15)
+        ax.errorbar(x, means, yerr=stds, fmt="none", color=color, capsize=2)
 
     ax.set_xlabel("Train size")
     ax.set_ylabel("AUC")
     ax.set_xticks(train_sizes)
-    ax.legend(loc="best")
-    ax.set_title("MIA AUC vs train size (adult_openml, CTGAN, rounds=20; mean ± std over 5 seeds)")
+    ax.legend(loc="best", ncol=2, fontsize=8)
+    ax.set_title("MIA AUC vs train size (adult_openml, CTGAN, rounds=20; Naive & Delta; mean ± std over 5 seeds)")
     ax.set_ylim(0.45, 1.0)
     ax.axhline(0.5, color="gray", linestyle="--", alpha=0.7)
     ax.grid(True, alpha=0.3)
