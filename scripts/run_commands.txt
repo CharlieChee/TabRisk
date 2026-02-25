@@ -145,6 +145,15 @@ nohup bash scripts/run_six_shadow_metrics.sh > run_six_shadow_metrics.log 2>&1 &
 # train_adult_openml_preprocess_monotonic_train500_synth500_ctgan_300iter_bs256_candidate100_control_20260220_004442/   -> mmd 500
 
 
+# ---------- AUC vs Rounds（按 rounds 变化，6 种 MIA 攻击 AUC 曲线） ----------
+# 条件：outputs 下目录含 adult_openml + ctgan + 1000iter_bs256，目录名含 rounds{N}、seed{M}
+# 对每个 run 跑 shadow_mia_from_raw.py，按 rounds 聚合，横轴 rounds、纵轴 6 种攻击 AUC
+# 结果：scripts/demo_auc_results/auc_vs_rounds/adult_openml_ctgan/all_runs.csv, auc_vs_rounds.png
+python scripts/demo_auc_vs_rounds.py --dataset adult_openml --model ctgan --base-filter 1000iter_bs256 --n-jobs 64
+# 仅画图（不重跑 MIA）：python scripts/demo_auc_vs_rounds.py --dataset adult_openml --model ctgan --skip-run
+# 后台：nohup python scripts/demo_auc_vs_rounds.py --dataset adult_openml --model ctgan --n-jobs 64 > demo_auc_vs_rounds.log 2>&1 &
+
+
 # ---------- AUC / Stability 汇总与成图（基于已跑完的 control run） ----------
 # 在 outputs/ 下扫描所有带 control 的 run，用 pair_metrics + control + mmd_component_analysis 算 AUC/adv_auc 与 stability，出表出图
 python scripts/make_auc_stability_figs.py --outputs outputs --outdir outputs/figures
