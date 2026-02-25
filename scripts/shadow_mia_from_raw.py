@@ -21,7 +21,7 @@ import numpy as np
 import pandas as pd
 from sklearn.linear_model import LogisticRegression
 from sklearn.metrics import roc_auc_score
-from sklearn.model_selection import GroupKFold, cross_validate
+from sklearn.model_selection import GroupKFold, cross_val_predict, cross_validate
 from sklearn.pipeline import Pipeline
 from sklearn.preprocessing import StandardScaler
 
@@ -483,6 +483,90 @@ def _compute_learned_aucs(run_dir: Path, cv: int = 5, random_state: int = 42) ->
     return out
 
 
+def _get_learned_scores_df(run_dir: Path, cv: int = 5, random_state: int = 42) -> pd.DataFrame:
+    """
+    Return a DataFrame with (target_idx, round, naive_learned_member, naive_learned_control,
+    delta_learned_member, delta_learned_control) using out-of-fold LR predicted probabilities.
+    Empty DataFrame if pair_metrics missing.
+    """
+    pair_path = run_dir / "shadow_pair_metrics" / "pair_metrics.csv"
+    control_path = run_dir / "shadow_pair_metrics" / "pair_metrics_control.csv"
+    if not pair_path.exists() or not control_path.exists():
+        return pd.DataFrame()
+    df_m = pd.read_csv(pair_path)
+    df_c = pd.read_csv(control_path)
+    if df_m.empty or df_c.empty:
+        return pd.DataFrame()
+    id_cols = [c for c in ["target_idx", "round"] if c in df_m.columns and c in df_c.columns]
+    if not id_cols:
+        return pd.DataFrame()
+    merged = df_m.merge(df_c, on=id_cols, how="inner", suffixes=("_m", "_c"))
+    if merged.empty:
+        return pd.DataFrame()
+    common = set(df_m.select_dtypes(include=[np.number]).columns) & set(df_c.select_dtypes(include=[np.number]).columns)
+    common -= {"target_idx", "round"}
+    feature_cols = [x for x in FEATURE_CANDIDATES if x in common] or sorted(common)
+    feat_m = [f"{c}_m" for c in feature_cols if f"{c}_m" in merged.columns]
+    feat_c = [f"{c}_c" for c in feature_cols if f"{c}_c" in merged.columns]
+    if not feat_m or not feat_c:
+        return pd.DataFrame()
+
+    merged = merged.sample(frac=1, random_state=random_state).reset_index(drop=True)
+    N = len(merged)
+    n_cv = min(cv, max(2, N // 2))
+    M = merged[feat_m].replace([np.inf, -np.inf], np.nan).fillna(0).to_numpy()
+    C = merged[feat_c].replace([np.inf, -np.inf], np.nan).fillna(0).to_numpy()
+    X_naive = np.vstack([M, C])
+    y_naive = np.concatenate([np.ones(N), np.zeros(N)])
+    groups_naive = np.concatenate([np.arange(N), np.arange(N)])
+    delta = M - C
+    X_delta = np.vstack([delta, -delta])
+    y_delta = np.concatenate([np.ones(N), np.zeros(N)])
+    groups_delta = np.repeat(np.arange(N), 2)
+
+    rng = np.random.default_rng(random_state)
+    group_ids = np.arange(N)
+    rng.shuffle(group_ids)
+    n_per_fold = max(1, N // n_cv)
+    splits_naive = []
+    for f in range(n_cv):
+        test_groups = set(
+            group_ids[f * n_per_fold : (f + 1) * n_per_fold] if f < n_cv - 1 else group_ids[f * n_per_fold :]
+        )
+        if f == n_cv - 1 and len(test_groups) == 0:
+            test_groups = set(group_ids[(n_cv - 1) * n_per_fold :])
+        test_idx = np.array([i for i in range(2 * N) if groups_naive[i] in test_groups], dtype=np.intp)
+        train_idx = np.array([i for i in range(2 * N) if groups_naive[i] not in test_groups], dtype=np.intp)
+        splits_naive.append((train_idx, test_idx))
+    if any(len(s[1]) < 4 or len(np.unique(y_naive[s[1]])) < 2 for s in splits_naive):
+        gkf = GroupKFold(n_splits=n_cv)
+        splits_naive = list(gkf.split(X_naive, y_naive, groups_naive))
+    splits_delta = []
+    for f in range(n_cv):
+        test_groups = set(
+            group_ids[f * n_per_fold : (f + 1) * n_per_fold] if f < n_cv - 1 else group_ids[f * n_per_fold :]
+        )
+        if f == n_cv - 1 and len(test_groups) == 0:
+            test_groups = set(group_ids[(n_cv - 1) * n_per_fold :])
+        test_idx = np.array([i for i in range(2 * N) if groups_delta[i] in test_groups], dtype=np.intp)
+        train_idx = np.array([i for i in range(2 * N) if groups_delta[i] not in test_groups], dtype=np.intp)
+        splits_delta.append((train_idx, test_idx))
+    if any(len(s[1]) < 4 or len(np.unique(y_delta[s[1]])) < 2 for s in splits_delta):
+        gkf = GroupKFold(n_splits=n_cv)
+        splits_delta = list(gkf.split(X_delta, y_delta, groups_delta))
+
+    factory = LEARNED_CLASSIFIERS[0][1]
+    pipe = Pipeline([("scaler", StandardScaler()), ("clf", factory())])
+    pred_naive = cross_val_predict(pipe, X_naive, y_naive, cv=splits_naive, method="predict_proba")[:, 1]
+    pred_delta = cross_val_predict(pipe, X_delta, y_delta, cv=splits_delta, method="predict_proba")[:, 1]
+    out = merged[id_cols].copy()
+    out["naive_learned_member"] = pred_naive[:N]
+    out["naive_learned_control"] = pred_naive[N:]
+    out["delta_learned_member"] = pred_delta[:N]
+    out["delta_learned_control"] = pred_delta[N:]
+    return out
+
+
 def _run_one_run(
     run_dir: Path, n_jobs: int = 1, export_scores_path: Optional[Path] = None
 ) -> Dict[str, float]:
@@ -587,7 +671,16 @@ def _run_one_run(
     if export_scores_path and export_rows:
         export_scores_path = Path(export_scores_path)
         export_scores_path.parent.mkdir(parents=True, exist_ok=True)
-        pd.DataFrame(export_rows).to_csv(export_scores_path, index=False)
+        export_df = pd.DataFrame(export_rows)
+        if _ensure_pair_metrics(run_dir, n_jobs=n_jobs):
+            learned_df = _get_learned_scores_df(run_dir)
+            if not learned_df.empty:
+                export_df = export_df.merge(
+                    learned_df,
+                    on=["target_idx", "round"],
+                    how="left",
+                )
+        export_df.to_csv(export_scores_path, index=False)
 
     # Learned：若 pair_metrics 不存在则先跑 pipeline，再算 Naive/Delta × 多分类器 AUC
     learned_suffixes = [s for s, _ in LEARNED_CLASSIFIERS]

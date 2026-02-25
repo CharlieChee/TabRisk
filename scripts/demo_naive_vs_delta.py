@@ -40,7 +40,7 @@ def run_mia_and_export(run_dir: Path, out_auc_csv: Path, out_scores_csv: Path, n
 
 
 def plot_auc_comparison(auc_row: pd.Series, fig_path: Path, run_name: str) -> None:
-    """柱状图：三组攻击（k-NN / Density / Learned），每组 Naive vs Delta，直观看出 Delta 更高。"""
+    """Bar chart: Naive vs Delta AUC for k-NN, Density, Learned."""
     groups = [
         ("k-NN (k=8)", "auc_naive_knn_k8", "auc_delta_knn_k8"),
         ("Density", "auc_naive_density", "auc_delta_density"),
@@ -61,7 +61,7 @@ def plot_auc_comparison(auc_row: pd.Series, fig_path: Path, run_name: str) -> No
     ax.set_xticklabels(labels)
     ax.legend(loc="lower right", fontsize=10)
     ax.set_ylim(0.45, 1.02)
-    ax.set_title(f"Naive vs Delta: AUC 对比\n({run_name})", fontsize=11)
+    ax.set_title(f"Naive vs Delta: AUC comparison\n({run_name})", fontsize=11)
     ax.grid(True, axis="y", alpha=0.3)
     for b in bars1:
         h = b.get_height()
@@ -75,14 +75,45 @@ def plot_auc_comparison(auc_row: pd.Series, fig_path: Path, run_name: str) -> No
     fig_path.parent.mkdir(parents=True, exist_ok=True)
     fig.savefig(fig_path, dpi=150)
     plt.close(fig)
-    print(f"已保存: {fig_path}")
+    print(f"Saved: {fig_path}")
+
+
+def _plot_one_score_distribution(
+    naive_m: pd.Series, naive_c: pd.Series, delta_m: pd.Series, delta_c: pd.Series,
+    title_suffix: str, fig_path: Path, run_name: str,
+) -> None:
+    """One 1x2 figure: Naive (member vs control) | Delta (member vs control). All labels in English."""
+    fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(11, 4.5))
+    nb = lambda n: min(50, max(20, n // 5))
+
+    ax1.hist(naive_m, bins=nb(len(naive_m)), alpha=0.6, density=True, label="Member", color="steelblue", edgecolor="white")
+    ax1.hist(naive_c, bins=nb(len(naive_c)), alpha=0.6, density=True, label="Control", color="coral", edgecolor="white")
+    ax1.set_xlabel(f"Naive {title_suffix} score")
+    ax1.set_ylabel("Density")
+    ax1.set_title("Naive: Member vs Control\n(more overlap)")
+    ax1.legend()
+    ax1.grid(True, alpha=0.3)
+
+    ax2.hist(delta_m, bins=nb(len(delta_m)), alpha=0.6, density=True, label="Member", color="steelblue", edgecolor="white")
+    ax2.hist(delta_c, bins=nb(len(delta_c)), alpha=0.6, density=True, label="Control", color="coral", edgecolor="white")
+    if (delta_m.values < 0).any() or (delta_c.values > 0).any():
+        ax2.axvline(0, color="gray", linestyle="--", alpha=0.8)
+    ax2.set_xlabel(f"Delta {title_suffix} score")
+    ax2.set_ylabel("Density")
+    ax2.set_title("Delta: Member vs Control\n(better separation)")
+    ax2.legend()
+    ax2.grid(True, alpha=0.3)
+
+    fig.suptitle(f"Score distribution — {title_suffix} ({run_name})", fontsize=12, y=1.02)
+    fig.tight_layout()
+    fig_path.parent.mkdir(parents=True, exist_ok=True)
+    fig.savefig(fig_path, dpi=150)
+    plt.close(fig)
+    print(f"Saved: {fig_path}")
 
 
 def plot_score_distributions(df: pd.DataFrame, fig_path: Path, run_name: str, use_density: bool = False) -> None:
-    """
-    左右两图：左 = Naive 分数分布（member vs control），右 = Delta 分数分布（member=+δ, control=-δ）。
-    展示 Delta 通过「差分」使两类分离更明显。
-    """
+    """K-NN or Density score distribution: Naive (member vs control) vs Delta (better separation)."""
     if use_density:
         m_col, c_col, delta_col = "naive_density_member", "naive_density_control", "delta_density"
         title_suffix = "Density"
@@ -92,36 +123,24 @@ def plot_score_distributions(df: pd.DataFrame, fig_path: Path, run_name: str, us
 
     naive_m = df[m_col].dropna()
     naive_c = df[c_col].dropna()
-    delta_m = df[delta_col].dropna()   # member 得分 = +δ
-    delta_c = (-df[delta_col]).dropna() # control 得分 = -δ
+    delta_m = df[delta_col].dropna()
+    delta_c = (-df[delta_col]).dropna()
+    _plot_one_score_distribution(naive_m, naive_c, delta_m, delta_c, title_suffix, fig_path, run_name)
 
-    fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(11, 4.5))
 
-    # Naive: 两条分布重叠往往较多
-    ax1.hist(naive_m, bins=min(50, max(20, len(naive_m) // 5)), alpha=0.6, density=True, label="Member", color="steelblue", edgecolor="white")
-    ax1.hist(naive_c, bins=min(50, max(20, len(naive_c) // 5)), alpha=0.6, density=True, label="Control", color="coral", edgecolor="white")
-    ax1.set_xlabel(f"Naive {title_suffix} score")
-    ax1.set_ylabel("Density")
-    ax1.set_title("Naive: 同一分数尺度下\nMember 与 Control 重叠较多")
-    ax1.legend()
-    ax1.grid(True, alpha=0.3)
-
-    # Delta: member=+δ, control=-δ，中心对称分离
-    ax2.hist(delta_m, bins=min(50, max(20, len(delta_m) // 5)), alpha=0.6, density=True, label="Member (+δ)", color="steelblue", edgecolor="white")
-    ax2.hist(delta_c, bins=min(50, max(20, len(delta_c) // 5)), alpha=0.6, density=True, label="Control (−δ)", color="coral", edgecolor="white")
-    ax2.axvline(0, color="gray", linestyle="--", alpha=0.8)
-    ax2.set_xlabel(f"Delta {title_suffix} score")
-    ax2.set_ylabel("Density")
-    ax2.set_title("Delta: 差分后 Member/Control\n以 0 为界分离更明显")
-    ax2.legend()
-    ax2.grid(True, alpha=0.3)
-
-    fig.suptitle(f"分数分布对比 — {title_suffix} ({run_name})", fontsize=12, y=1.02)
-    fig.tight_layout()
-    fig_path.parent.mkdir(parents=True, exist_ok=True)
-    fig.savefig(fig_path, dpi=150)
-    plt.close(fig)
-    print(f"已保存: {fig_path}")
+def plot_learned_score_distribution(df: pd.DataFrame, fig_path: Path, run_name: str) -> None:
+    """Learned (LR) score distribution: Naive member/control vs Delta member/control. All English."""
+    m_col = "naive_learned_member"
+    c_col = "naive_learned_control"
+    dm_col = "delta_learned_member"
+    dc_col = "delta_learned_control"
+    if m_col not in df.columns or dm_col not in df.columns:
+        return
+    naive_m = df[m_col].dropna()
+    naive_c = df[c_col].dropna()
+    delta_m = df[dm_col].dropna()
+    delta_c = df[dc_col].dropna()
+    _plot_one_score_distribution(naive_m, naive_c, delta_m, delta_c, "Learned (LR)", fig_path, run_name)
 
 
 def main() -> int:
