@@ -1,7 +1,8 @@
 #!/usr/bin/env python3
 """
-Demo: 对 outputs/ 下 adult_openml + ctgan + rounds=20 的 run（train=200,500,1000,1500,2000 × 5 seeds）
-执行 shadow_mia_from_raw.py，汇总 AUC，并画图：横轴 train_size，纵轴 AUC，带方差柱、5 条线（k-NN k=1,8,32, density, learned）。
+Demo: 对 outputs/ 下 adult_openml + 指定模型(ctgan/ddpm) + rounds=20 的 run（train=200,500,1000,1500,2000 × 5 seeds）
+执行 shadow_mia_from_raw.py，汇总 AUC，并画图：横轴 train_size，纵轴 AUC，Naive & Delta 各方法带方差柱。
+用法: --model ctgan 或 --model ddpm
 """
 
 from __future__ import annotations
@@ -18,27 +19,31 @@ import pandas as pd
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 OUTPUTS_DIR = PROJECT_ROOT / "outputs"
 SCRIPT_MIA = PROJECT_ROOT / "scripts" / "shadow_mia_from_raw.py"
-RESULTS_DIR = PROJECT_ROOT / "scripts" / "demo_auc_results"
-COMBINED_CSV = RESULTS_DIR / "all_runs.csv"
-FIG_PATH = RESULTS_DIR / "auc_vs_trainsize.png"
+RESULTS_BASE = PROJECT_ROOT / "scripts" / "demo_auc_results"
 
 TRAIN_SIZES = [200, 500, 1000, 1500, 2000]
 N_SEEDS = 5
-REQUIRED_SUBSTRINGS = ["adult_openml", "ctgan", "rounds20"]
 TRAIN_PATTERN = re.compile(r"train(\d+)(?:_|$)")
 SEED_PATTERN = re.compile(r"seed(\d+)(?:_|$)")
 
 
-def find_run_dirs() -> list[tuple[Path, int, int]]:
-    """返回 [(run_dir, train_size, seed), ...]，仅保留 train in TRAIN_SIZES 且 seed 在 5 个以内去重。"""
+def get_model_paths(model: str) -> tuple[Path, Path, Path]:
+    """返回 (results_dir, combined_csv, fig_path) 用于指定 model。"""
+    results_dir = RESULTS_BASE / model
+    return results_dir, results_dir / "all_runs.csv", results_dir / "auc_vs_trainsize.png"
+
+
+def find_run_dirs(model: str) -> list[tuple[Path, int, int]]:
+    """返回 [(run_dir, train_size, seed), ...]，筛选 adult_openml + model + rounds20。"""
     if not OUTPUTS_DIR.exists():
         return []
+    required = ["adult_openml", model, "rounds20"]
     out: list[tuple[Path, int, int]] = []
     for d in OUTPUTS_DIR.iterdir():
         if not d.is_dir():
             continue
         name = d.name
-        if not all(s in name for s in REQUIRED_SUBSTRINGS):
+        if not all(s in name for s in required):
             continue
         m_train = TRAIN_PATTERN.search(name)
         m_seed = SEED_PATTERN.search(name)
@@ -49,7 +54,6 @@ def find_run_dirs() -> list[tuple[Path, int, int]]:
         if train_size not in TRAIN_SIZES:
             continue
         out.append((d.resolve(), train_size, seed))
-    # 每个 (train_size, seed) 只保留一个目录（若有多个时间戳取第一个）
     key_to_path: dict[tuple[int, int], Path] = {}
     for d, train_size, seed in sorted(out, key=lambda x: (x[1], x[2], str(x[0]))):
         key = (train_size, seed)
@@ -58,10 +62,12 @@ def find_run_dirs() -> list[tuple[Path, int, int]]:
     return [(path, ts, seed) for (ts, seed), path in sorted(key_to_path.items(), key=lambda x: (x[0][0], x[0][1]))]
 
 
-def run_mia_and_save(run_dir: Path, train_size: int, seed: int, n_jobs: int = 4) -> Path | None:
-    """对单个 run 执行 shadow_mia_from_raw.py，结果保存到 RESULTS_DIR，返回 CSV 路径。"""
-    RESULTS_DIR.mkdir(parents=True, exist_ok=True)
-    out_csv = RESULTS_DIR / f"train{train_size}_seed{seed}.csv"
+def run_mia_and_save(
+    run_dir: Path, train_size: int, seed: int, results_dir: Path, n_jobs: int = 4
+) -> Path | None:
+    """对单个 run 执行 shadow_mia_from_raw.py，结果保存到 results_dir，返回 CSV 路径。"""
+    results_dir.mkdir(parents=True, exist_ok=True)
+    out_csv = results_dir / f"train{train_size}_seed{seed}.csv"
     cmd = [
         sys.executable,
         str(SCRIPT_MIA),
@@ -73,18 +79,16 @@ def run_mia_and_save(run_dir: Path, train_size: int, seed: int, n_jobs: int = 4)
     if ret.returncode != 0:
         print(f"  [FAIL] {run_dir.name}: {ret.stderr[:200] if ret.stderr else ret.stdout[:200]}", file=sys.stderr)
         return None
-    if out_csv.exists():
-        return out_csv
-    return None
+    return out_csv if out_csv.exists() else None
 
 
-def load_and_aggregate() -> pd.DataFrame:
-    """读取 RESULTS_DIR 下所有 run 的 CSV，并附加 train_size, seed 列；若存在 COMBINED_CSV 则优先读。"""
-    if COMBINED_CSV.exists():
-        df = pd.read_csv(COMBINED_CSV)
+def load_and_aggregate(results_dir: Path, combined_csv: Path) -> pd.DataFrame:
+    """读取 results_dir 下所有 run 的 CSV；若存在 combined_csv 则优先读。"""
+    if combined_csv.exists():
+        df = pd.read_csv(combined_csv)
         return df
     rows = []
-    for p in sorted(RESULTS_DIR.glob("train*_seed*.csv")):
+    for p in sorted(results_dir.glob("train*_seed*.csv")):
         m = re.match(r"train(\d+)_seed(\d+)\.csv", p.name)
         if not m:
             continue
@@ -100,7 +104,7 @@ def load_and_aggregate() -> pd.DataFrame:
     return pd.concat(rows, ignore_index=True)
 
 
-def plot_auc_vs_trainsize(df: pd.DataFrame) -> None:
+def plot_auc_vs_trainsize(df: pd.DataFrame, fig_path: Path, model: str) -> None:
     """横轴 train_size，纵轴 AUC；每条线一个方法，带均值±std 的 error bar。"""
     if df.empty:
         raise SystemExit("无数据可画图")
@@ -150,31 +154,35 @@ def plot_auc_vs_trainsize(df: pd.DataFrame) -> None:
     ax.set_ylabel("AUC")
     ax.set_xticks(train_sizes)
     ax.legend(loc="best", ncol=2, fontsize=8)
-    ax.set_title("MIA AUC vs train size (adult_openml, CTGAN, rounds=20; Naive & Delta; mean ± std over 5 seeds)")
+    ax.set_title(f"MIA AUC vs train size (adult_openml, {model.upper()}, rounds=20; Naive & Delta; mean ± std over 5 seeds)")
     ax.set_ylim(0.45, 1.0)
     ax.axhline(0.5, color="gray", linestyle="--", alpha=0.7)
     ax.grid(True, alpha=0.3)
     fig.tight_layout()
-    FIG_PATH.parent.mkdir(parents=True, exist_ok=True)
-    fig.savefig(FIG_PATH, dpi=150)
+    fig_path.parent.mkdir(parents=True, exist_ok=True)
+    fig.savefig(fig_path, dpi=150)
     plt.close(fig)
-    print(f"图已保存: {FIG_PATH}")
+    print(f"图已保存: {fig_path}")
 
 
 def main() -> int:
     import argparse
-    parser = argparse.ArgumentParser(description="Run MIA on adult_openml+ctgan+rounds20 runs and plot AUC vs train_size.")
+    parser = argparse.ArgumentParser(
+        description="Run MIA on adult_openml + model(ctgan/ddpm) + rounds20 runs and plot AUC vs train_size."
+    )
+    parser.add_argument("--model", type=str, required=True, choices=["ctgan", "ddpm"], help="合成模型: ctgan 或 ddpm")
     parser.add_argument("--skip-run", action="store_true", help="不执行 MIA，仅用已有 CSV 画图")
     parser.add_argument("--n-jobs", type=int, default=4, help="MIA 并行进程数")
     args = parser.parse_args()
 
-    runs = find_run_dirs()
-    print(f"找到 {len(runs)} 个 run 目录 (train_size × seed)")
+    model = args.model
+    results_dir, combined_csv, fig_path = get_model_paths(model)
+    runs = find_run_dirs(model)
+    print(f"[{model}] 找到 {len(runs)} 个 run 目录 (train_size × seed)")
     if not runs:
-        print("未找到符合条件目录 (adult_openml, ctgan, rounds20, train in [200,500,1000,1500,2000])", file=sys.stderr)
+        print(f"未找到符合条件目录 (adult_openml, {model}, rounds20, train in {TRAIN_SIZES})", file=sys.stderr)
         return 1
 
-    # 检查是否每组 5 个 seed
     from collections import Counter
     train_counts = Counter(ts for _, ts, _ in runs)
     for ts in TRAIN_SIZES:
@@ -183,26 +191,25 @@ def main() -> int:
             print(f"  警告: train_size={ts} 有 {n} 个 run，期望 {N_SEEDS}", file=sys.stderr)
 
     if not args.skip_run:
-        RESULTS_DIR.mkdir(parents=True, exist_ok=True)
+        results_dir.mkdir(parents=True, exist_ok=True)
         for run_dir, train_size, seed in runs:
-            csv_path = RESULTS_DIR / f"train{train_size}_seed{seed}.csv"
+            csv_path = results_dir / f"train{train_size}_seed{seed}.csv"
             if csv_path.exists():
                 print(f"  跳过已存在: train{train_size} seed{seed}")
                 continue
             print(f"  运行: train{train_size} seed{seed} ...")
-            run_mia_and_save(run_dir, train_size, seed, n_jobs=args.n_jobs)
-        # 合并保存
-        df = load_and_aggregate()
+            run_mia_and_save(run_dir, train_size, seed, results_dir, n_jobs=args.n_jobs)
+        df = load_and_aggregate(results_dir, combined_csv)
         if not df.empty:
-            df.to_csv(COMBINED_CSV, index=False)
-            print(f"已合并写入: {COMBINED_CSV}")
+            df.to_csv(combined_csv, index=False)
+            print(f"已合并写入: {combined_csv}")
     else:
-        df = load_and_aggregate()
+        df = load_and_aggregate(results_dir, combined_csv)
 
     if df.empty:
         print("无结果数据，无法画图。请先去掉 --skip-run 运行一次。", file=sys.stderr)
         return 1
-    plot_auc_vs_trainsize(df)
+    plot_auc_vs_trainsize(df, fig_path, model)
     return 0
 
 
