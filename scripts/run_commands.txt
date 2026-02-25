@@ -226,6 +226,14 @@ python scripts/adult_ctgan_statistical_analysis.py --summary outputs/postprocess
 #       outlier_score_membership_leak_check.csv, outlier_stability_across_seeds.csv
 # python scripts/outlier_subgroup_mia.py --outputs outputs --outdir outputs/outlier_mia
 
+# ---------- 仅用影子模型原始数据做 MIA（无 pair_metrics）：4 种方法 ----------
+# 输入：单个 run 目录（含 shadow/target_*/synthetic_round_*_in/out.csv 与 _control_in/control_out.csv）。
+# 2(Naive/Delta) × 2(k-NN/Density)：Naive=不用 control 参与算分，Delta=减去 control 基线得差分信号；
+# k-NN 取 k=1,8,32（最近 k 条距离的平均），Density=DOMIAS 式 k-NN 密度 log(d_in)-log(d_out)。
+# 输出：auc_naive_knn_k1/k8/k32, auc_naive_density, auc_delta_knn_k1/k8/k32, auc_delta_density。
+# python scripts/shadow_mia_from_raw.py --run-dir outputs/train_adult_..._control_seed42_20260221_030832
+# python scripts/shadow_mia_from_raw.py --run-dir outputs/<run_dir> --output outputs/mia_from_raw_result.csv
+
 # ========== 实验流程与当前工作（第一人称简述） ==========
 #
 # 一、整体实验流程
