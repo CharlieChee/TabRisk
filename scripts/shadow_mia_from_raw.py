@@ -3,10 +3,9 @@
 6 组 MIA：2(Naive/Delta) × 3(k-NN/Density/Learned)。k-NN 取 k=1,8,32 为一组。
 
 - k-NN、Density：从原始 synthetic CSV 算（或从已有 pair_metrics 读入时 learned 才可用）。
-- Learned：用 pair_metrics 的 FEATURE_CANDIDATES 训练 LR。若 pair_metrics.csv / pair_metrics_control.csv
-  不存在则先调用 run_shadow_metrics_pipeline 生成。
+- Learned：用 pair_metrics 的 FEATURE_CANDIDATES 训练多种分类器（LR / RF / GB），若 pair_metrics 不存在则先跑 pipeline。
 
-输出：6 组 AUC（Naive k-NN k=1/8/32, Naive density, Naive learned, Delta k-NN k=1/8/32, Delta density, Delta learned）。
+输出：6 组 AUC（Naive k-NN, Naive density, Naive learned×3 分类器, Delta k-NN, Delta density, Delta learned×3 分类器）。
 """
 
 from __future__ import annotations
@@ -16,14 +15,22 @@ import subprocess
 import sys
 from concurrent.futures import ProcessPoolExecutor, as_completed
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Callable, Dict, List, Optional, Tuple
 
 import numpy as np
 import pandas as pd
+from sklearn.ensemble import GradientBoostingClassifier, RandomForestClassifier
 from sklearn.linear_model import LogisticRegression
 from sklearn.metrics import roc_auc_score
 from sklearn.model_selection import cross_validate
 from sklearn.preprocessing import StandardScaler
+
+# Learned 攻击器：名称后缀 -> 无参构造器（每次 CV 新建实例）
+LEARNED_CLASSIFIERS: List[Tuple[str, Callable[[], Any]]] = [
+    ("lr", lambda: LogisticRegression(max_iter=1000, random_state=42)),
+    ("rf", lambda: RandomForestClassifier(n_estimators=100, max_depth=10, random_state=42)),
+    ("gb", lambda: GradientBoostingClassifier(n_estimators=100, max_depth=4, random_state=42)),
+]
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 SCRIPT_DIR = Path(__file__).resolve().parent
@@ -365,8 +372,8 @@ def _ensure_pair_metrics(run_dir: Path, n_jobs: int = 4) -> bool:
 
 def _compute_learned_aucs(run_dir: Path, cv: int = 5) -> Dict[str, float]:
     """
-    从 pair_metrics.csv / pair_metrics_control.csv 计算 Naive+Learned 与 Delta+Learned 的 AUC。
-    使用 FEATURE_CANDIDATES，LR 5-fold CV。返回 auc_naive_learned, auc_delta_learned。
+    从 pair_metrics 计算 Naive/Delta Learned 的 AUC，对每种分类器（lr/rf/gb）分别 5-fold CV。
+    返回 auc_naive_learned_{lr,rf,gb}, auc_delta_learned_{lr,rf,gb}。
     """
     out: Dict[str, float] = {}
     pair_path = run_dir / "shadow_pair_metrics" / "pair_metrics.csv"
@@ -383,55 +390,54 @@ def _compute_learned_aucs(run_dir: Path, cv: int = 5) -> Dict[str, float]:
     if not feature_cols:
         return out
 
-    # Naive: member 行 vs control 行，每行用本行特征
+    def _cv_auc(X: np.ndarray, y: np.ndarray, suffix: str, factory: Callable[[], Any], prefix_naive: bool) -> None:
+        n_cv = min(cv, len(y) // 2)
+        if len(y) < n_cv * 2 or len(set(y)) < 2:
+            key = f"auc_{'naive' if prefix_naive else 'delta'}_learned_{suffix}"
+            out[key] = float("nan")
+            return
+        X = StandardScaler().fit_transform(X)
+        clf = factory()
+        res = cross_validate(clf, X, y, cv=n_cv, scoring="roc_auc", return_train_score=False)
+        mean_auc = float(np.mean(res["test_score"]))
+        key = f"auc_{'naive' if prefix_naive else 'delta'}_learned_{suffix}"
+        out[key] = max(mean_auc, 1.0 - mean_auc)
+
+    # Naive: member 行 vs control 行
     Xm = df_m[feature_cols].replace([np.inf, -np.inf], np.nan).fillna(0).to_numpy()
     Xc = df_c[feature_cols].replace([np.inf, -np.inf], np.nan).fillna(0).to_numpy()
     X_naive = np.vstack([Xm, Xc])
     y_naive = np.concatenate([np.ones(len(Xm)), np.zeros(len(Xc))])
-    if len(y_naive) >= cv * 2 and len(set(y_naive)) == 2:
-        X_naive = StandardScaler().fit_transform(X_naive)
-        clf = LogisticRegression(max_iter=1000, random_state=42)
-        res = cross_validate(clf, X_naive, y_naive, cv=min(cv, len(y_naive) // 2), scoring="roc_auc", return_train_score=False)
-        out["auc_naive_learned"] = max(float(np.mean(res["test_score"])), 1.0 - float(np.mean(res["test_score"])))
-    else:
-        out["auc_naive_learned"] = float("nan")
+    for suffix, factory in LEARNED_CLASSIFIERS:
+        _cv_auc(X_naive, y_naive, suffix, factory, prefix_naive=True)
 
-    # Delta: 按 (target_idx, round) 对齐，delta_vec = member - control，每对贡献 (delta, 1) 与 (-delta, 0)
+    # Delta: 按 (target_idx, round) 对齐，delta = member - control，(delta,1) 与 (-delta,0)
     id_cols = [c for c in ["target_idx", "round"] if c in df_m.columns and c in df_c.columns]
     if not id_cols:
-        out["auc_delta_learned"] = float("nan")
+        for suffix, _ in LEARNED_CLASSIFIERS:
+            out[f"auc_delta_learned_{suffix}"] = float("nan")
         return out
-    merged = df_m.merge(
-        df_c,
-        on=id_cols,
-        how="inner",
-        suffixes=("_m", "_c"),
-    )
+    merged = df_m.merge(df_c, on=id_cols, how="inner", suffixes=("_m", "_c"))
     if merged.empty:
-        out["auc_delta_learned"] = float("nan")
+        for suffix, _ in LEARNED_CLASSIFIERS:
+            out[f"auc_delta_learned_{suffix}"] = float("nan")
         return out
     feat_m = [c for c in merged.columns if c.endswith("_m") and c.replace("_m", "") in feature_cols]
     feat_c = [c.replace("_m", "_c") for c in feat_m]
-    base = [c.replace("_m", "") for c in feat_m]
-    if len(base) != len(feature_cols):
-        base = feature_cols
+    if len(feat_m) != len(feature_cols):
         feat_m = [f"{c}_m" for c in feature_cols if f"{c}_m" in merged.columns]
         feat_c = [f"{c}_c" for c in feature_cols if f"{c}_c" in merged.columns]
     if not feat_m or not feat_c:
-        out["auc_delta_learned"] = float("nan")
+        for suffix, _ in LEARNED_CLASSIFIERS:
+            out[f"auc_delta_learned_{suffix}"] = float("nan")
         return out
     M = merged[feat_m].replace([np.inf, -np.inf], np.nan).fillna(0).to_numpy()
     C = merged[feat_c].replace([np.inf, -np.inf], np.nan).fillna(0).to_numpy()
     delta = M - C
     X_delta = np.vstack([delta, -delta])
     y_delta = np.concatenate([np.ones(len(delta)), np.zeros(len(delta))])
-    if len(y_delta) >= cv * 2 and len(set(y_delta)) == 2:
-        X_delta = StandardScaler().fit_transform(X_delta)
-        clf = LogisticRegression(max_iter=1000, random_state=42)
-        res = cross_validate(clf, X_delta, y_delta, cv=min(cv, len(y_delta) // 2), scoring="roc_auc", return_train_score=False)
-        out["auc_delta_learned"] = max(float(np.mean(res["test_score"])), 1.0 - float(np.mean(res["test_score"])))
-    else:
-        out["auc_delta_learned"] = float("nan")
+    for suffix, factory in LEARNED_CLASSIFIERS:
+        _cv_auc(X_delta, y_delta, suffix, factory, prefix_naive=False)
     return out
 
 
@@ -519,14 +525,15 @@ def _run_one_run(run_dir: Path, n_jobs: int = 1) -> Dict[str, float]:
     out["auc_naive_density"] = _auc(naive_density_scores, naive_density_labels)
     out["auc_delta_density"] = _auc(delta_density_scores, delta_density_labels)
 
-    # Learned：若 pair_metrics 不存在则先跑 pipeline，再算 Naive/Delta Learned AUC
+    # Learned：若 pair_metrics 不存在则先跑 pipeline，再算 Naive/Delta × 多分类器 AUC
+    learned_suffixes = [s for s, _ in LEARNED_CLASSIFIERS]
     if _ensure_pair_metrics(run_dir, n_jobs=n_jobs):
         learned = _compute_learned_aucs(run_dir, cv=5)
-        out["auc_naive_learned"] = learned.get("auc_naive_learned", float("nan"))
-        out["auc_delta_learned"] = learned.get("auc_delta_learned", float("nan"))
+        out.update(learned)
     else:
-        out["auc_naive_learned"] = float("nan")
-        out["auc_delta_learned"] = float("nan")
+        for s in learned_suffixes:
+            out[f"auc_naive_learned_{s}"] = float("nan")
+            out[f"auc_delta_learned_{s}"] = float("nan")
 
     return out
 
@@ -567,14 +574,15 @@ def main() -> int:
         print("未找到有效的 (target, round) 配对（需同时有 member in/out 与 control in/out）", file=sys.stderr)
         return 1
 
-    print("AUC (6 组: Naive/Delta × k-NN(k=1,8,32)/density/learned):")
+    learned_suffixes = [s for s, _ in LEARNED_CLASSIFIERS]
+    print("AUC (6 组: Naive/Delta × k-NN(k=1,8,32)/density/learned(lr,rf,gb)):")
     groups = [
         ("1. Naive k-NN (k=1,8,32)", [f"auc_naive_knn_k{k}" for k in KNN_K_LIST]),
         ("2. Naive density", ["auc_naive_density"]),
-        ("3. Naive learned", ["auc_naive_learned"]),
+        ("3. Naive learned (lr,rf,gb)", [f"auc_naive_learned_{s}" for s in learned_suffixes]),
         ("4. Delta k-NN (k=1,8,32)", [f"auc_delta_knn_k{k}" for k in KNN_K_LIST]),
         ("5. Delta density", ["auc_delta_density"]),
-        ("6. Delta learned", ["auc_delta_learned"]),
+        ("6. Delta learned (lr,rf,gb)", [f"auc_delta_learned_{s}" for s in learned_suffixes]),
     ]
     for label, keys in groups:
         vals = [result.get(k, float("nan")) for k in keys]
