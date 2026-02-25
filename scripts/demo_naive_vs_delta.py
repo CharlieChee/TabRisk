@@ -54,14 +54,14 @@ def plot_auc_comparison(auc_row: pd.Series, fig_path: Path, run_name: str) -> No
     w = 0.35
     fig, ax = plt.subplots(figsize=(7, 5))
     bars1 = ax.bar(x - w / 2, naive_vals, w, label="Naive", color="steelblue", edgecolor="black", linewidth=0.8)
-    bars2 = ax.bar(x + w / 2, delta_vals, w, label="Delta (differential)", color="coral", edgecolor="black", linewidth=0.8)
+    bars2 = ax.bar(x + w / 2, delta_vals, w, label="Differential", color="coral", edgecolor="black", linewidth=0.8)
     ax.axhline(0.5, color="gray", linestyle="--", alpha=0.8, label="Random (0.5)")
     ax.set_ylabel("AUC", fontsize=12)
     ax.set_xticks(x)
     ax.set_xticklabels(labels)
     ax.legend(loc="lower right", fontsize=10)
     ax.set_ylim(0.45, 1.02)
-    ax.set_title(f"Naive vs Delta: AUC comparison\n({run_name})", fontsize=11)
+    ax.set_title(f"Naive vs Differential: AUC comparison\n({run_name})", fontsize=11)
     ax.grid(True, axis="y", alpha=0.3)
     for b in bars1:
         h = b.get_height()
@@ -71,18 +71,18 @@ def plot_auc_comparison(auc_row: pd.Series, fig_path: Path, run_name: str) -> No
         h = b.get_height()
         if np.isfinite(h):
             ax.annotate(f"{h:.3f}", xy=(b.get_x() + b.get_width() / 2, h), ha="center", va="bottom", fontsize=9, rotation=0)
-    fig.tight_layout()
+    fig.tight_layout(rect=[0, 0, 1, 0.96])
     fig_path.parent.mkdir(parents=True, exist_ok=True)
-    fig.savefig(fig_path, dpi=150)
+    fig.savefig(fig_path, dpi=150, bbox_inches="tight")
     plt.close(fig)
     print(f"Saved: {fig_path}")
 
 
 def _plot_one_score_distribution(
-    naive_m: pd.Series, naive_c: pd.Series, delta_m: pd.Series, delta_c: pd.Series,
+    naive_m: pd.Series, naive_c: pd.Series, diff_m: pd.Series, diff_c: pd.Series,
     title_suffix: str, fig_path: Path, run_name: str,
 ) -> None:
-    """One 1x2 figure: Naive (member vs control) | Delta (member vs control). All labels in English."""
+    """One 1x2 figure: Naive (member vs control) | Differential (member vs control). All labels in English."""
     fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(11, 4.5))
     nb = lambda n: min(50, max(20, n // 5))
 
@@ -94,42 +94,49 @@ def _plot_one_score_distribution(
     ax1.legend()
     ax1.grid(True, alpha=0.3)
 
-    ax2.hist(delta_m, bins=nb(len(delta_m)), alpha=0.6, density=True, label="Member", color="steelblue", edgecolor="white")
-    ax2.hist(delta_c, bins=nb(len(delta_c)), alpha=0.6, density=True, label="Control", color="coral", edgecolor="white")
-    if (delta_m.values < 0).any() or (delta_c.values > 0).any():
+    ax2.hist(diff_m, bins=nb(len(diff_m)), alpha=0.6, density=True, label="Member", color="steelblue", edgecolor="white")
+    ax2.hist(diff_c, bins=nb(len(diff_c)), alpha=0.6, density=True, label="Control", color="coral", edgecolor="white")
+    if (diff_m.values < 0).any() or (diff_c.values > 0).any():
         ax2.axvline(0, color="gray", linestyle="--", alpha=0.8)
-    ax2.set_xlabel(f"Delta {title_suffix} score")
+    ax2.set_xlabel(f"Differential {title_suffix} score")
     ax2.set_ylabel("Density")
-    ax2.set_title("Delta: Member vs Control\n(better separation)")
+    ax2.set_title("Differential: Member vs Control\n(better separation)")
     ax2.legend()
     ax2.grid(True, alpha=0.3)
 
-    fig.suptitle(f"Score distribution — {title_suffix} ({run_name})", fontsize=12, y=1.02)
-    fig.tight_layout()
+    fig.suptitle(f"Score distribution — {title_suffix}", fontsize=12, y=0.98)
+    fig.tight_layout(rect=[0, 0, 1, 0.94])
     fig_path.parent.mkdir(parents=True, exist_ok=True)
-    fig.savefig(fig_path, dpi=150)
+    fig.savefig(fig_path, dpi=150, bbox_inches="tight")
     plt.close(fig)
     print(f"Saved: {fig_path}")
 
 
-def plot_score_distributions(df: pd.DataFrame, fig_path: Path, run_name: str, use_density: bool = False) -> None:
-    """K-NN or Density score distribution: Naive (member vs control) vs Delta (better separation)."""
-    if use_density:
-        m_col, c_col, delta_col = "naive_density_member", "naive_density_control", "delta_density"
+def plot_score_distributions_knn_or_density(
+    df: pd.DataFrame, fig_path: Path, run_name: str, k: int | None = None, density: bool = False
+) -> None:
+    """Score distribution for one attack: k-NN (k=1,8,32) or Density. k=None and density=True for Density."""
+    if density:
+        m_col, c_col, diff_col = "naive_density_member", "naive_density_control", "delta_density"
         title_suffix = "Density"
     else:
-        m_col, c_col, delta_col = "naive_knn_k8_member", "naive_knn_k8_control", "delta_knn_k8"
-        title_suffix = "k-NN (k=8)"
-
+        if k is None:
+            k = 8
+        m_col = f"naive_knn_k{k}_member"
+        c_col = f"naive_knn_k{k}_control"
+        diff_col = f"delta_knn_k{k}"
+        title_suffix = f"k-NN (k={k})"
+    if m_col not in df.columns or diff_col not in df.columns:
+        return
     naive_m = df[m_col].dropna()
     naive_c = df[c_col].dropna()
-    delta_m = df[delta_col].dropna()
-    delta_c = (-df[delta_col]).dropna()
-    _plot_one_score_distribution(naive_m, naive_c, delta_m, delta_c, title_suffix, fig_path, run_name)
+    diff_m = df[diff_col].dropna()
+    diff_c = (-df[diff_col]).dropna()
+    _plot_one_score_distribution(naive_m, naive_c, diff_m, diff_c, title_suffix, fig_path, run_name)
 
 
 def plot_learned_score_distribution(df: pd.DataFrame, fig_path: Path, run_name: str) -> None:
-    """Learned (LR) score distribution: Naive member/control vs Delta member/control. All English."""
+    """Learned (LR) score distribution: Naive vs Differential. All English."""
     m_col = "naive_learned_member"
     c_col = "naive_learned_control"
     dm_col = "delta_learned_member"
@@ -138,9 +145,9 @@ def plot_learned_score_distribution(df: pd.DataFrame, fig_path: Path, run_name: 
         return
     naive_m = df[m_col].dropna()
     naive_c = df[c_col].dropna()
-    delta_m = df[dm_col].dropna()
-    delta_c = df[dc_col].dropna()
-    _plot_one_score_distribution(naive_m, naive_c, delta_m, delta_c, "Learned (LR)", fig_path, run_name)
+    diff_m = df[dm_col].dropna()
+    diff_c = df[dc_col].dropna()
+    _plot_one_score_distribution(naive_m, naive_c, diff_m, diff_c, "Learned (LR)", fig_path, run_name)
 
 
 def main() -> int:
@@ -150,7 +157,6 @@ def main() -> int:
     parser.add_argument("--mia-csv", type=str, default=None, help="已有 MIA AUC CSV 则直接读，不重跑 MIA")
     parser.add_argument("--scores-csv", type=str, default=None, help="已有 per-pair 分数 CSV 则直接读")
     parser.add_argument("--n-jobs", type=int, default=4, help="MIA 并行进程数")
-    parser.add_argument("--use-density", action="store_true", help="分布图用 Density 分数；默认用 k-NN k=8")
     args = parser.parse_args()
 
     run_dir = Path(args.run_dir)
@@ -190,7 +196,13 @@ def main() -> int:
         print("Warning: no per-pair scores file, only plotting AUC comparison.")
     else:
         scores_df = pd.read_csv(scores_csv)
-        plot_score_distributions(scores_df, outdir / "score_distributions.png", run_name, use_density=args.use_density)
+        for k in [1, 8, 32]:
+            plot_score_distributions_knn_or_density(
+                scores_df, outdir / f"score_distributions_knn_k{k}.png", run_name, k=k
+            )
+        plot_score_distributions_knn_or_density(
+            scores_df, outdir / "score_distributions_density.png", run_name, density=True
+        )
         plot_learned_score_distribution(scores_df, outdir / "score_distributions_learned.png", run_name)
 
     plot_auc_comparison(auc_row, outdir / "auc_naive_vs_delta.png", run_name)

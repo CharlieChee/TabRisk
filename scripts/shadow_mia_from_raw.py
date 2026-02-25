@@ -627,17 +627,16 @@ def _run_one_run(
             delta_density_scores.append(-delta_d)
             delta_density_labels.append(0)
         if export_scores_path is not None and ti is not None and rk is not None:
-            s_m8, s_c8 = res["naive_knn"].get(8, (float("nan"), float("nan")))
-            export_rows.append({
-                "target_idx": ti,
-                "round": rk,
-                "naive_knn_k8_member": s_m8,
-                "naive_knn_k8_control": s_c8,
-                "delta_knn_k8": res["delta_knn"].get(8, float("nan")),
-                "naive_density_member": res["naive_density"][0],
-                "naive_density_control": res["naive_density"][1],
-                "delta_density": res["delta_density"],
-            })
+            row: Dict[str, Any] = {"target_idx": ti, "round": rk}
+            for k in KNN_K_LIST:
+                s_m, s_c = res["naive_knn"].get(k, (float("nan"), float("nan")))
+                row[f"naive_knn_k{k}_member"] = s_m
+                row[f"naive_knn_k{k}_control"] = s_c
+                row[f"delta_knn_k{k}"] = res["delta_knn"].get(k, float("nan"))
+            row["naive_density_member"] = res["naive_density"][0]
+            row["naive_density_control"] = res["naive_density"][1]
+            row["delta_density"] = res["delta_density"]
+            export_rows.append(row)
 
     if n_jobs <= 1:
         for ti, rk, in_p, out_p, c_in_p, c_out_p in path_list:
