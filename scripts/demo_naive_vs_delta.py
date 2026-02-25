@@ -19,6 +19,7 @@ import pandas as pd
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 SCRIPT_MIA = PROJECT_ROOT / "scripts" / "shadow_mia_from_raw.py"
+DEFAULT_OUTDIR = PROJECT_ROOT / "scripts" / "demo_auc_results" / "naive_vs_delta"
 
 
 def run_mia_and_export(run_dir: Path, out_auc_csv: Path, out_scores_csv: Path, n_jobs: int) -> bool:
@@ -126,7 +127,7 @@ def plot_score_distributions(df: pd.DataFrame, fig_path: Path, run_name: str, us
 def main() -> int:
     parser = argparse.ArgumentParser(description="单 run 展示 Naive vs Delta 的 AUC 与分数分布。")
     parser.add_argument("--run-dir", type=str, required=True, help="run 目录路径（相对或绝对）")
-    parser.add_argument("--outdir", type=str, default=None, help="图与中间 CSV 输出目录，默认 run_dir 下的 demo_naive_vs_delta")
+    parser.add_argument("--outdir", type=str, default=None, help="图与中间 CSV 输出目录，默认 scripts/demo_auc_results/naive_vs_delta")
     parser.add_argument("--mia-csv", type=str, default=None, help="已有 MIA AUC CSV 则直接读，不重跑 MIA")
     parser.add_argument("--scores-csv", type=str, default=None, help="已有 per-pair 分数 CSV 则直接读")
     parser.add_argument("--n-jobs", type=int, default=4, help="MIA 并行进程数")
@@ -140,7 +141,7 @@ def main() -> int:
         print(f"错误: run_dir 不存在: {run_dir}", file=sys.stderr)
         return 1
 
-    outdir = Path(args.outdir) if args.outdir else run_dir / "demo_naive_vs_delta"
+    outdir = Path(args.outdir) if args.outdir else DEFAULT_OUTDIR
     outdir.mkdir(parents=True, exist_ok=True)
     run_name = run_dir.name[:60] + ("..." if len(run_dir.name) > 60 else "")
 

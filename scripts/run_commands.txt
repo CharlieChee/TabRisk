@@ -156,9 +156,9 @@ python scripts/demo_auc_vs_rounds.py --dataset adult_openml --model ctgan --base
 
 # ---------- Naive vs Delta 直观展示（单 run：AUC 对比柱状图 + 分数分布图） ----------
 # 展示差分（Delta）相对 Naive 的优越性：图1 三组攻击的 Naive/Delta AUC 柱状图；图2 分数分布（Naive 重叠 vs Delta 以 0 分离）
-# 产出：run_dir/demo_naive_vs_delta/auc_naive_vs_delta.png, score_distributions.png, mia_auc.csv, per_pair_scores.csv
+# 产出默认在 scripts/demo_auc_results/naive_vs_delta/：auc_naive_vs_delta.png, score_distributions.png, mia_auc.csv, per_pair_scores.csv
 python scripts/demo_naive_vs_delta.py --run-dir "outputs/train_adult_openml_preprocess_monotonic_train1000_synth1000_ctgan_1000iter_bs256_rounds20_candidate100_control_seed42_20260220_234247" --n-jobs 4
-# 指定输出目录：--outdir scripts/demo_naive_vs_delta_output
+# 指定其他输出目录：--outdir path/to/other
 # 分布图用 Density 分数：--use-density
 
 
