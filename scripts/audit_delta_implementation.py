@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import argparse
 import sys
+from concurrent.futures import ProcessPoolExecutor, as_completed
 from pathlib import Path
 
 import numpy as np
@@ -139,9 +140,19 @@ def compute_delta_learned_auc(df_m: pd.DataFrame, df_c: pd.DataFrame, shuffle_co
     return raw_auc, abs_auc
 
 
+def _shuffle_trial(args: tuple) -> tuple[float, float]:
+    """单次 shuffle 试验，供多进程调用。args = (pm_path, pc_path, seed)。"""
+    pm_path, pc_path, seed = args
+    df_m = pd.read_csv(pm_path)
+    df_c = pd.read_csv(pc_path)
+    return compute_delta_learned_auc(df_m, df_c, shuffle_control=True, random_state=seed)
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description="Delta 方法实现审计")
     parser.add_argument("--run-dir", type=str, required=True, help="run 目录路径")
+    parser.add_argument("--n-jobs", type=int, default=1, help="Shuffle 试验并行进程数，>1 时多次 shuffle 取 mean±std")
+    parser.add_argument("--n-shuffle-trials", type=int, default=10, help="Shuffle 试验次数（n-jobs>1 时生效）")
     args = parser.parse_args()
 
     run_dir = Path(args.run_dir)
@@ -256,8 +267,24 @@ def main() -> int:
         df_c = pd.read_csv(pc_path)
         raw_auc, abs_auc = compute_delta_learned_auc(df_m, df_c, shuffle_control=False)
         print(f"  正常 pairing: raw AUC = {raw_auc:.6f}, abs AUC = {abs_auc:.6f}")
-        raw_shuf, abs_shuf = compute_delta_learned_auc(df_m, df_c, shuffle_control=True)
-        print(f"  Shuffle control 后配对: raw AUC = {raw_shuf:.6f}, abs AUC = {abs_shuf:.6f}")
+        n_trials = args.n_shuffle_trials if args.n_jobs > 1 else 1
+        if args.n_jobs > 1 and n_trials > 1:
+            trial_args = [(str(pm_path), str(pc_path), 42 + i) for i in range(n_trials)]
+            raw_shuf_list, abs_shuf_list = [], []
+            with ProcessPoolExecutor(max_workers=min(args.n_jobs, n_trials)) as ex:
+                futures = {ex.submit(_shuffle_trial, a): a for a in trial_args}
+                for fut in as_completed(futures):
+                    r, a = fut.result()
+                    raw_shuf_list.append(r)
+                    abs_shuf_list.append(a)
+            raw_shuf = float(np.mean(raw_shuf_list))
+            abs_shuf = float(np.mean(abs_shuf_list))
+            raw_std = float(np.std(raw_shuf_list))
+            abs_std = float(np.std(abs_shuf_list))
+            print(f"  Shuffle control 后配对（{n_trials} 次试验, n_jobs={args.n_jobs}）: raw AUC = {raw_shuf:.6f} ± {raw_std:.6f}, abs AUC = {abs_shuf:.6f} ± {abs_std:.6f}")
+        else:
+            raw_shuf, abs_shuf = compute_delta_learned_auc(df_m, df_c, shuffle_control=True)
+            print(f"  Shuffle control 后配对: raw AUC = {raw_shuf:.6f}, abs AUC = {abs_shuf:.6f}")
         if abs_shuf > 0.55:
             print("  WARN: Shuffle 后 AUC 仍明显 >0.5，可能存在 leakage（如 merge 错配或使用了 target_idx 等）。")
             results["5_shuffle_test"] = "FAIL"
