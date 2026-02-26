@@ -263,6 +263,29 @@ nohup python scripts/shadow_mia_from_raw.py \
 # 与原有 δ = (M_in - M_out) - (M_c1 - M_c2) 并列，输出 auc_delta_avg_knn_k1/k8/k32, auc_delta_avg_density
 python scripts/shadow_mia_from_raw.py --run-dir "outputs/train_adult_openml_preprocess_monotonic_train1000_synth1000_ctgan_1000iter_bs256_rounds20_candidate100_control_seed42_20260220_234247" --output scripts/demo_auc_results/delta_avg_mia_result.csv --n-jobs 32
 
+# ---------- ctgan rounds=20，iter ∈ {200,500,1000,1500,2000}，5 组 seed，跑 MIA 后按 iter 求均值 ----------
+# 自动扫描 outputs/ 下含 ctgan、rounds20、control、对应 iter 与 seed 的 run，逐个跑 shadow_mia_from_raw，再按 n_iter 对 AUC 求平均
+python scripts/run_mia_by_iter_seeds.py \
+  --iters 200 500 1000 1500 2000 \
+  --rounds 20 \
+  --n-seeds 5 \
+  --model ctgan \
+  --dataset adult_openml \
+  --n-jobs 32
+# 指定 5 个 seed：--seed-list 42 43 44 45 46
+# 仅汇总已有 CSV（不重跑 MIA）：--skip-run
+# 32 进程 + nohup 后台：
+nohup python scripts/run_mia_by_iter_seeds.py \
+  --iters 200 500 1000 1500 2000 \
+  --rounds 20 \
+  --n-seeds 5 \
+  --model ctgan \
+  --dataset adult_openml \
+  --n-jobs 32 \
+  > mia_by_iter.log 2>&1 &
+# 结果目录默认: scripts/demo_auc_results/mia_by_iter_ctgan_rounds20/
+# 产出: iter{N}_seed{S}.csv 每 run 一份, all_runs.csv 明细, summary_mean_by_iter.csv 按 iter 的 AUC 均值±std
+
 # ========== 实验流程与当前工作（第一人称简述） ==========
 #
 # 一、整体实验流程
