@@ -251,6 +251,18 @@ python scripts/adult_ctgan_statistical_analysis.py --summary outputs/postprocess
 # python scripts/shadow_mia_from_raw.py --run-dir outputs/train_adult_..._control_seed42_20260221_030832 --n-jobs 32
 # python scripts/shadow_mia_from_raw.py --run-dir outputs/<run_dir> --output outputs/mia_from_raw_result.csv --n-jobs 32
 
+# 32 进程 + nohup 后台运行（日志到 shadow_mia.log，可改 run-dir / output）
+nohup python scripts/shadow_mia_from_raw.py \
+  --run-dir "outputs/train_adult_openml_preprocess_monotonic_train1000_synth1000_ctgan_1000iter_bs256_rounds20_candidate100_control_seed42_20260220_234247" \
+  --output scripts/demo_auc_results/delta_avg_mia_result.csv \
+  --n-jobs 32 \
+  > shadow_mia.log 2>&1 &
+# 查看进度: tail -f shadow_mia.log
+
+# ---------- Delta_avg 实验：δ_avg = M_in - (M_out + M_c1 + M_c2)/3 ----------
+# 与原有 δ = (M_in - M_out) - (M_c1 - M_c2) 并列，输出 auc_delta_avg_knn_k1/k8/k32, auc_delta_avg_density
+python scripts/shadow_mia_from_raw.py --run-dir "outputs/train_adult_openml_preprocess_monotonic_train1000_synth1000_ctgan_1000iter_bs256_rounds20_candidate100_control_seed42_20260220_234247" --output scripts/demo_auc_results/delta_avg_mia_result.csv --n-jobs 32
+
 # ========== 实验流程与当前工作（第一人称简述） ==========
 #
 # 一、整体实验流程

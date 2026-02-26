@@ -338,11 +338,58 @@ def _worker_one_pair(
     d_m = _naive_score_density(dens_m["log_density_in"], dens_m["log_density_out"])
     d_c = _naive_score_density(dens_c["log_density_in"], dens_c["log_density_out"])
     delta_density = (d_m - d_c) if np.isfinite(d_m) and np.isfinite(d_c) else float("nan")
+
+    # δ_avg = M_in - (M_out + M_c1 + M_c2) / 3（in 与 三者的平均 对比）
+    # k-NN: M_in/M_out = member 的 in/out 平均距离，M_c1/M_c2 = control 的 in/out 平均距离
+    delta_avg_knn = {}
+    for k in KNN_K_LIST:
+        m_in = knn_m["in"][k]
+        m_out = knn_m["out"][k]
+        m_c1 = knn_c["in"][k]
+        m_c2 = knn_c["out"][k]
+        avg_other = (m_out + m_c1 + m_c2) / 3.0
+        if np.isfinite(m_in) and np.isfinite(avg_other):
+            delta_avg_knn[k] = float(m_in - avg_other)
+        else:
+            delta_avg_knn[k] = float("nan")
+    li = dens_m["log_density_in"]
+    lo = dens_m["log_density_out"]
+    lc1 = dens_c["log_density_in"]
+    lc2 = dens_c["log_density_out"]
+    avg_other_d = (lo + lc1 + lc2) / 3.0
+    delta_avg_density = float(li - avg_other_d) if np.isfinite(li) and np.isfinite(avg_other_d) else float("nan")
+
+    # Learned δ_avg：Δ_avg f = f_in - (f_out + f_c1 + f_c2)/3，per-set 特征现场算（不依赖 pair_metrics）
+    # f = [min_dist_to_set, mean_col1, mean_col2, ...] 对 in/out/c_in/c_out 各算一向量
+    delta_avg_learned_vec: Optional[np.ndarray] = None
+    if num_cols:
+        d_in = _mixed_type_distances(target_row, in_df, num_cols, cat_cols, joint_mu, joint_sigma)
+        d_out = _mixed_type_distances(target_row, out_df, num_cols, cat_cols, joint_mu, joint_sigma)
+        d_c_in = _mixed_type_distances(target_row, c_in_df, num_cols, cat_cols, mu_c, sigma_c)
+        d_c_out = _mixed_type_distances(target_row, c_out_df, num_cols, cat_cols, mu_c, sigma_c)
+        min_in = float(np.nanmin(d_in)) if len(d_in) else float("nan")
+        min_out = float(np.nanmin(d_out)) if len(d_out) else float("nan")
+        min_c1 = float(np.nanmin(d_c_in)) if len(d_c_in) else float("nan")
+        min_c2 = float(np.nanmin(d_c_out)) if len(d_c_out) else float("nan")
+        in_means = in_df[num_cols].mean().to_numpy(dtype=float)
+        out_means = out_df[num_cols].mean().to_numpy(dtype=float)
+        c_in_means = c_in_df[num_cols].mean().to_numpy(dtype=float)
+        c_out_means = c_out_df[num_cols].mean().to_numpy(dtype=float)
+        f_in = np.concatenate([[min_in], in_means])
+        f_out = np.concatenate([[min_out], out_means])
+        f_c1 = np.concatenate([[min_c1], c_in_means])
+        f_c2 = np.concatenate([[min_c2], c_out_means])
+        delta_avg_learned_vec = f_in - (f_out + f_c1 + f_c2) / 3.0
+        delta_avg_learned_vec = np.nan_to_num(delta_avg_learned_vec, nan=0.0, posinf=0.0, neginf=0.0)
+
     return {
         "naive_knn": naive_knn,
         "naive_density": naive_density,
         "delta_knn": delta_knn,
         "delta_density": delta_density,
+        "delta_avg_knn": delta_avg_knn,
+        "delta_avg_density": delta_avg_density,
+        "delta_avg_learned_vec": delta_avg_learned_vec,
     }
 
 
@@ -380,20 +427,24 @@ def _compute_learned_aucs(run_dir: Path, cv: int = 5, random_state: int = 42) ->
     control_path = run_dir / "shadow_pair_metrics" / "pair_metrics_control.csv"
     if not pair_path.exists() or not control_path.exists():
         return out
+
     df_m = pd.read_csv(pair_path)
     df_c = pd.read_csv(control_path)
     if df_m.empty or df_c.empty:
         return out
+
     id_cols = [c for c in ["target_idx", "round"] if c in df_m.columns and c in df_c.columns]
     if not id_cols:
         for suffix, _ in LEARNED_CLASSIFIERS:
             out[f"auc_naive_learned_{suffix}"] = out[f"auc_delta_learned_{suffix}"] = float("nan")
         return out
+
     merged = df_m.merge(df_c, on=id_cols, how="inner", suffixes=("_m", "_c"))
     if merged.empty:
         for suffix, _ in LEARNED_CLASSIFIERS:
             out[f"auc_naive_learned_{suffix}"] = out[f"auc_delta_learned_{suffix}"] = float("nan")
         return out
+
     common = set(df_m.select_dtypes(include=[np.number]).columns) & set(df_c.select_dtypes(include=[np.number]).columns)
     common -= {"target_idx", "round"}
     feature_cols = [x for x in FEATURE_CANDIDATES if x in common] or sorted(common)
@@ -428,6 +479,7 @@ def _compute_learned_aucs(run_dir: Path, cv: int = 5, random_state: int = 42) ->
     group_ids = np.arange(N)
     rng.shuffle(group_ids)
     n_per_fold = max(1, N // n_cv)
+
     splits_naive: List[Tuple[np.ndarray, np.ndarray]] = []
     for f in range(n_cv):
         test_groups = set(
@@ -480,6 +532,7 @@ def _compute_learned_aucs(run_dir: Path, cv: int = 5, random_state: int = 42) ->
         _cv_auc_splits(X_naive, y_naive, splits_naive, suffix, factory, prefix_naive=True)
     for suffix, factory in LEARNED_CLASSIFIERS:
         _cv_auc_splits(X_delta, y_delta, splits_delta, suffix, factory, prefix_naive=False)
+
     return out
 
 
@@ -592,6 +645,11 @@ def _run_one_run(
     delta_knn_labels: Dict[int, List[int]] = {k: [] for k in KNN_K_LIST}
     delta_density_scores: List[float] = []
     delta_density_labels: List[int] = []
+    delta_avg_knn_scores: Dict[int, List[float]] = {k: [] for k in KNN_K_LIST}
+    delta_avg_knn_labels: Dict[int, List[int]] = {k: [] for k in KNN_K_LIST}
+    delta_avg_density_scores: List[float] = []
+    delta_avg_density_labels: List[int] = []
+    delta_avg_learned_vecs: List[np.ndarray] = []
 
     export_rows: List[Dict[str, Any]] = []
 
@@ -626,6 +684,22 @@ def _run_one_run(
             delta_density_labels.append(1)
             delta_density_scores.append(-delta_d)
             delta_density_labels.append(0)
+        for k in KNN_K_LIST:
+            d_avg = res.get("delta_avg_knn", {}).get(k, float("nan"))
+            if np.isfinite(d_avg):
+                delta_avg_knn_scores[k].append(d_avg)
+                delta_avg_knn_labels[k].append(1)
+                delta_avg_knn_scores[k].append(-d_avg)
+                delta_avg_knn_labels[k].append(0)
+        d_avg_d = res.get("delta_avg_density", float("nan"))
+        if np.isfinite(d_avg_d):
+            delta_avg_density_scores.append(d_avg_d)
+            delta_avg_density_labels.append(1)
+            delta_avg_density_scores.append(-d_avg_d)
+            delta_avg_density_labels.append(0)
+        v = res.get("delta_avg_learned_vec")
+        if v is not None and isinstance(v, np.ndarray) and v.size > 0:
+            delta_avg_learned_vecs.append(np.asarray(v, dtype=float).ravel())
         if export_scores_path is not None and ti is not None and rk is not None:
             row: Dict[str, Any] = {"target_idx": ti, "round": rk}
             for k in KNN_K_LIST:
@@ -636,6 +710,14 @@ def _run_one_run(
             row["naive_density_member"] = res["naive_density"][0]
             row["naive_density_control"] = res["naive_density"][1]
             row["delta_density"] = res["delta_density"]
+            for k in KNN_K_LIST:
+                row[f"delta_avg_knn_k{k}"] = res.get("delta_avg_knn", {}).get(k, float("nan"))
+            row["delta_avg_density"] = res.get("delta_avg_density", float("nan"))
+            v_exp = res.get("delta_avg_learned_vec")
+            if v_exp is not None and isinstance(v_exp, np.ndarray) and v_exp.size > 0:
+                row["delta_avg_learned"] = float(np.linalg.norm(np.asarray(v_exp, dtype=float).ravel()))
+            else:
+                row["delta_avg_learned"] = float("nan")
             export_rows.append(row)
 
     if n_jobs <= 1:
@@ -664,8 +746,30 @@ def _run_one_run(
     for k in KNN_K_LIST:
         out[f"auc_naive_knn_k{k}"] = _auc(naive_knn_scores[k], naive_knn_labels[k])
         out[f"auc_delta_knn_k{k}"] = _auc(delta_knn_scores[k], delta_knn_labels[k])
+        out[f"auc_delta_avg_knn_k{k}"] = _auc(delta_avg_knn_scores[k], delta_avg_knn_labels[k])
     out["auc_naive_density"] = _auc(naive_density_scores, naive_density_labels)
     out["auc_delta_density"] = _auc(delta_density_scores, delta_density_labels)
+    out["auc_delta_avg_density"] = _auc(delta_avg_density_scores, delta_avg_density_labels)
+
+    # Learned δ_avg：用现场算的 Δ_avg f 向量，[+Δ_avg f; -Δ_avg f] + GroupKFold CV
+    learned_suffixes = [s for s, _ in LEARNED_CLASSIFIERS]
+    for s in learned_suffixes:
+        out[f"auc_delta_avg_learned_{s}"] = float("nan")
+    if len(delta_avg_learned_vecs) >= 2:
+        X_dav = np.vstack(delta_avg_learned_vecs)
+        N_dav = len(X_dav)
+        X_dav_full = np.vstack([X_dav, -X_dav])
+        y_dav = np.concatenate([np.ones(N_dav), np.zeros(N_dav)])
+        groups_dav = np.repeat(np.arange(N_dav), 2)
+        n_cv = min(5, max(2, N_dav // 2))
+        gkf = GroupKFold(n_splits=n_cv)
+        splits_dav = list(gkf.split(X_dav_full, y_dav, groups_dav))
+        if all(len(s[1]) >= 4 and len(np.unique(y_dav[s[1]])) >= 2 for s in splits_dav):
+            for suffix, factory in LEARNED_CLASSIFIERS:
+                pipe = Pipeline([("scaler", StandardScaler()), ("clf", factory())])
+                res_cv = cross_validate(pipe, X_dav_full, y_dav, cv=splits_dav, scoring="roc_auc", return_train_score=False)
+                mean_auc = float(np.mean(res_cv["test_score"]))
+                out[f"auc_delta_avg_learned_{suffix}"] = max(mean_auc, 1.0 - mean_auc)
 
     if export_scores_path and export_rows:
         export_scores_path = Path(export_scores_path)
@@ -738,7 +842,7 @@ def main() -> int:
         return 1
 
     learned_suffixes = [s for s, _ in LEARNED_CLASSIFIERS]
-    print("AUC (6 组: Naive/Delta × k-NN(k=1,8,32)/density/learned(lr)):")
+    print("AUC (Naive / Delta / Delta_avg × k-NN/density/learned):")
     groups = [
         ("1. Naive k-NN (k=1,8,32)", [f"auc_naive_knn_k{k}" for k in KNN_K_LIST]),
         ("2. Naive density", ["auc_naive_density"]),
@@ -746,6 +850,9 @@ def main() -> int:
         ("4. Delta k-NN (k=1,8,32)", [f"auc_delta_knn_k{k}" for k in KNN_K_LIST]),
         ("5. Delta density", ["auc_delta_density"]),
         ("6. Delta learned (lr)", [f"auc_delta_learned_{s}" for s in learned_suffixes]),
+        ("7. Delta_avg k-NN (k=1,8,32)", [f"auc_delta_avg_knn_k{k}" for k in KNN_K_LIST]),
+        ("8. Delta_avg density", ["auc_delta_avg_density"]),
+        ("9. Delta_avg learned (lr)", [f"auc_delta_avg_learned_{s}" for s in learned_suffixes]),
     ]
     for label, keys in groups:
         vals = [result.get(k, float("nan")) for k in keys]
