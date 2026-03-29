@@ -7,8 +7,8 @@ CUDA_VISIBLE_DEVICES=7 python -m synthgen.train \
   model=ctgan \
   model.params.device=cuda \
   preprocess=monotonic \
-  train_rows=2000 \
-  synthetic_rows=2000 \
+  train_rows=200 \
+  synthetic_rows=200 \
   model.params.n_iter=300 \
   model.params.batch_size=1024
 
@@ -30,3 +30,287 @@ CUDA_VISIBLE_DEVICES=7 python -m synthgen.train data=standard/law_school model=c
 CUDA_VISIBLE_DEVICES=7 python -m synthgen.train data=standard/compas model=ctgan model.params.device=cuda preprocess=monotonic train_rows=2000 synthetic_rows=2000 model.params.n_iter=300 model.params.batch_size=1024
 
   
+
+  nohup python -m synthgen.train \
+  data=standard/adult_openml \
+  model=ddpm model.params.device=cuda \
+  preprocess=monotonic \
+  train_rows=500 synthetic_rows=500 \
+  model.params.n_iter=1000 model.params.batch_size=256 \
+  shadow_model=true \
+  shadow.num_shadow_rounds=20 shadow.max_targets=100 shadow.random_seed=42 \
+  shadow.engine=worker \
+  shadow.control_branch=true \
+  shadow.gpu_ids="[0,1,2,3,4,5,6,7]" \
+  shadow.worker_concurrency_per_gpu=4 \
+  shadow.reuse_mode=true \
+  shadow.reuse_num_bases=5 \
+  shadow.reuse_num_out_candidates=5 \
+  shadow.reuse_num_control_candidates=5 \
+  > train_ctgan_shadow.log 2>&1 &
+
+
+
+
+
+1. train_rows=1000 synthetic_rows=1000 model.params.n_iter=300 model.params.batch_size=256 
+
+2. train_rows=500 synthetic_rows=500 model.params.n_iter=300 model.params.batch_size=256 
+
+3. train_rows=200 synthetic_rows=200 model.params.n_iter=1000 model.params.batch_size=200
+
+4. train_rows=200 synthetic_rows=200 model.params.n_iter=2000 model.params.batch_size=200
+
+5. train_rows=1000 synthetic_rows=1000 model.params.n_iter=1000 model.params.batch_size=128
+
+6. train_rows=1000 synthetic_rows=1000 model.params.n_iter=300 model.params.batch_size=128
+
+
+
+
+
+
+  python scripts/shadow_target_match_stats.py \
+  --run-dir outputs/train_adult_openml_preprocess_monotonic_train1000_synth100000_ctgan_300iter_20260216_105405 \
+  --max-targets 7 \
+  --fraction 0.7 \
+  --epsilon 0.1 \
+  --n-jobs 64 \
+  --output-dir outputs/match_demo_result/shadow_stats
+
+
+[1] 2804020
+
+
+
+
+
+# ---------- 已训练好且含 control 的影子模型：后续实验 ----------
+# 方式一：用 pipeline 脚本（推荐，跑完后自动打印保存文件说明与路径）
+nohup python scripts/run_shadow_metrics_pipeline.py \
+  --run-dir outputs//train_adult_openml_preprocess_monotonic_train1500_synth1500_ctgan_1000iter_bs256_rounds20_candidate100_control_seed46_20260221_181549/ \
+  --n-jobs 32 \
+  --max-targets 100 \
+  --mmd-max-rows 1000 \
+  > run_shadow_metrics_pipeline.log 2>&1 &
+
+# 方式二：对 outputs/ 下所有目录批量执行（自动跳过已执行 + target 不足的）
+# 规则：已存在 shadow_pair_metrics/ 的跳过；shadow/ 下 target 数 < 100 的只记录不跑；其余后台执行
+# Demo（在项目根目录执行）：
+#   bash scripts/batch_run_shadow_metrics_all_outputs.sh
+# 关掉终端也继续跑：
+#   nohup bash scripts/batch_run_shadow_metrics_all_outputs.sh > batch_all_outputs_launcher.log 2>&1 &
+# target 不足的目录会记录到：logs_shadow_metrics_batch/insufficient_targets.txt
+# 每个 run 的 pipeline 日志：logs_shadow_metrics_batch/<run_dir名>.log
+
+
+# ---------- 数据保存位置（均在 run_dir/shadow_pair_metrics/ 下） ----------
+# 来自 shadow_pair_metrics.py：
+#   pair_metrics.csv              每个 (target_idx, round_k) 的 in/out 对：MMD、列统计、target 最近邻 delta 等
+#   summary_by_target.csv        按 target 聚合的 in/out 指标（均值/方差等）
+#   pair_metrics_control.csv     （有 control 时）每个 round 的 control_in/control_out 对同样指标
+#   summary_by_target_control.csv（有 control 时）按 target 聚合的 control 指标
+# 来自 shadow_delta_analysis.py：
+#   global_delta_stats.json      delta_min_dist 总体统计（均值、置信区间、t/Wilcoxon 检验、Cohen's d）
+#   delta_distribution.png      delta 分布直方图
+#   control_comparison.json     （有 control 时）target delta vs control delta 成对对照（均值、t 检验等）
+#   mmd_component_analysis.json numeric-only vs mixed MMD 相关性等
+#   outlier_targets.json        异常 target 及 round 级 delta 列表
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+# ---------- 6 个 run_dir 按顺序跑 shadow metrics pipeline（一键后台） ----------
+# mmd-max-rows = min(train_rows, 1000)：train200->200, train500->500, train1000->1000
+# 每个 run 的日志在 scripts/ 下 run_shadow_metrics_<dirname>.log，或设 LOG_DIR 指定目录
+nohup bash scripts/run_six_shadow_metrics.sh > run_six_shadow_metrics.log 2>&1 &
+
+# 上述 6 个路径（供对照）：
+# train_adult_openml_preprocess_monotonic_train1000_synth1000_ctgan_1000iter_bs128_candidate100_control_20260220_025014/  -> mmd 1000
+# train_adult_openml_preprocess_monotonic_train1000_synth1000_ctgan_300iter_bs128_candidate100_control_20260220_063750/   -> mmd 1000
+# train_adult_openml_preprocess_monotonic_train200_synth200_ctgan_1000iter_bs200_candidate100_control_20260220_011714/  -> mmd 200
+# train_adult_openml_preprocess_monotonic_train200_synth200_ctgan_2000iter_bs200_candidate100_control_20260220_020314/  -> mmd 200
+# train_adult_openml_preprocess_monotonic_train1000_synth1000_ctgan_300iter_bs256_candidate100_control_20260219_233544/  -> mmd 1000
+# train_adult_openml_preprocess_monotonic_train500_synth500_ctgan_300iter_bs256_candidate100_control_20260220_004442/   -> mmd 500
+
+
+# ---------- AUC vs Rounds（按 rounds 变化，6 种 MIA 攻击 AUC 曲线） ----------
+# 条件：outputs 下目录含 adult_openml + ctgan + 1000iter_bs256，目录名含 rounds{N}、seed{M}
+# 对每个 run 跑 shadow_mia_from_raw.py，按 rounds 聚合，横轴 rounds、纵轴 6 种攻击 AUC
+# 结果：scripts/demo_auc_results/auc_vs_rounds/adult_openml_ctgan/all_runs.csv, auc_vs_rounds.png
+python scripts/demo_auc_vs_rounds.py --dataset adult_openml --model ctgan --base-filter 1000iter_bs256 --n-jobs 64
+# 仅画图（不重跑 MIA）：python scripts/demo_auc_vs_rounds.py --dataset adult_openml --model ctgan --skip-run
+# 后台：nohup python scripts/demo_auc_vs_rounds.py --dataset adult_openml --model ctgan --n-jobs 64 > demo_auc_vs_rounds.log 2>&1 &
+
+
+# ---------- Naive vs Delta 直观展示（单 run：AUC 对比柱状图 + 分数分布图） ----------
+# 展示差分（Delta）相对 Naive 的优越性：图1 三组攻击的 Naive/Delta AUC 柱状图；图2 分数分布（Naive 重叠 vs Delta 以 0 分离）
+# 产出默认在 scripts/demo_auc_results/naive_vs_delta/：auc_naive_vs_delta.png, score_distributions.png, mia_auc.csv, per_pair_scores.csv
+python scripts/demo_naive_vs_delta.py --run-dir "outputs/train_adult_openml_preprocess_monotonic_train1000_synth1000_ctgan_1000iter_bs256_rounds20_candidate100_control_seed42_20260220_234247" --n-jobs 4
+# 指定其他输出目录：--outdir path/to/other
+# 分布图用 Density 分数：--use-density
+
+
+# ---------- AUC / Stability 汇总与成图（基于已跑完的 control run） ----------
+# 在 outputs/ 下扫描所有带 control 的 run，用 pair_metrics + control + mmd_component_analysis 算 AUC/adv_auc 与 stability，出表出图
+python scripts/make_auc_stability_figs.py --outputs outputs --outdir outputs/figures
+
+
+# ---------- 桥接表与 Adv vs 稳定性 5 张图（run_level_bridge_table + 图1–5） ----------
+# 核心逻辑：Adv(AUC) 与 in/out 分布差异（s_run = mean MMD）正相关验证。
+# 过滤：仅 control run；DDPM train_size in [200,500,1000,1500] 5 seeds → 20 条；CTGAN train_size in [200,500,1000,1500,2000] rounds20 5 seeds，同配置同 seed 取较新时间戳 → 25 条。
+# 产出：run_level_bridge_table.csv（每 run 一行：model, train_size, iter, rounds, batch_size, adv_auc, s_run, r_run, paired_d, seed, run_dir）+ 5 张图。
+# Demo（在项目根目录执行）：
+python scripts/build_run_level_bridge.py --outputs outputs --outdir outputs/figures --table outputs/run_level_bridge_table.csv
+# 只出 3 张主图（不出图4 图5）：
+# python scripts/build_run_level_bridge.py --outputs outputs --outdir outputs/figures --table outputs/run_level_bridge_table.csv --no-fig4 --no-fig5
+# 若 run 在子目录（如 outputs/postprocess_adult_ddpm/），脚本会同时扫描 outputs 与 outputs/*/ 一层子目录。
+
+
+# ---------- 稳健 bridge 分析（在桥接表基础上补齐 trim95/median/p95、方向性、SNR、partial corr、敏感性、图） ----------
+# 依赖：已生成 run_level_bridge_table.csv，且各 run 下存在 shadow_pair_metrics/pair_metrics.csv（有 control 时需 pair_metrics_control.csv）
+# 产出：bridge_robust_stability_table.csv, bridge_with_control_excess.csv, partial_corr_summary.csv, sensitivity_remove_outliers.csv, figA/figA2/figB/figC/figD
+python scripts/build_bridge_robust_analysis.py --table outputs/run_level_bridge_table.csv --outdir outputs/figures
+
+
+# ---------- 最终四项验证（mediation / interaction / per-model / bound） ----------
+# 依赖：bridge_robust_stability_table.csv、bridge_with_control_excess.csv（可选）
+# 产出：run_level_final.csv, mediation_models_summary.csv, interaction_binned_spearman.csv, interaction_I1_summary.csv, per_model_mechanism_summary.csv, bound_proxy_summary.csv, fig_med1/med2/med3, fig_interaction_*, fig_pm_*, fig_bound_*
+python scripts/run_final_four_validations.py --robust outputs/figures/bridge_robust_stability_table.csv --control outputs/figures/bridge_with_control_excess.csv --outdir outputs/figures
+
+
+# ---------- Membership scaling 分析（adv_abs vs N, density, clf, tail, shift partial） ----------
+# 产出：run_level_adv_abs.csv, run_level_adv_abs_density.csv, run_level_adv_abs_clf.csv, run_level_tail_metrics.csv,
+#       scaling_model_summary.csv, shift_partial_summary.csv, fig_main_adv_abs_vs_N*.png, fig_density_*, fig_clf_*, fig_tail_*, fig_fraction_*
+python scripts/run_membership_scaling_analysis.py --outputs outputs --outdir outputs/figures
+# 或指定已有 run 表：python scripts/run_membership_scaling_analysis.py --table outputs/run_level_bridge_table.csv --outputs outputs --outdir outputs/figures
+
+
+# ---------- 局部攻击族稳健性测试（density 多 k + classifier 多模型） ----------
+# 产出：run_level_density_multi_k.csv, run_level_classifier_multi_model.csv, fig_density_multi_k_scaling.png, fig_classifier_multi_model_scaling.png + PART A/B/C 打印
+python scripts/run_membership_scaling_robust.py --outputs outputs --outdir outputs/figures --n_jobs 4
+
+
+# ---------- DDPM 反弹统计显著性与稳健性验证 ----------
+# 依赖：run_level_adv_abs.csv, run_level_adv_abs_density.csv, run_level_adv_abs_clf.csv（含 model==ddpm）
+# 产出：ddpm_scaling_significance_summary.csv, ddpm_bootstrap_by_N.csv, ddpm_leave_one_out_slopes.csv, ddpm_permutation_test.csv, fig_ddpm_bootstrap_scaling.png
+# --n_jobs 4 可加速 PART 2/3/4（bootstrap、LOO、permutation）
+python scripts/run_ddpm_scaling_validation.py --indir outputs/figures --outdir outputs/figures --n_jobs 4
+
+
+# ---------- Adult+CTGAN LOO-MIA 端到端后处理（论文结果包） ----------
+# 产出：统一总表、平衡子集、Fig1–Fig4、Table1、可选 Fig5 learned attacker、postprocess_report.txt
+# 要求 run 名称含 adult + control，且 shadow_pair_metrics 下存在 pair_metrics.csv、pair_metrics_control.csv、mmd_component_analysis.json
+python scripts/adult_ctgan_loomia_postprocess.py --outputs outputs --outdir outputs/postprocess_adult_ctgan
+# 含 Fig5（learned attacker）时：
+python scripts/adult_ctgan_loomia_postprocess.py --outputs outputs --outdir outputs/postprocess_adult_ctgan --with-fig5
+# 多进程加速（例如 8 进程）：扫描+AUC 与 Fig5 均并行
+python scripts/adult_ctgan_loomia_postprocess.py --outputs outputs --outdir outputs/postprocess_adult_ctgan --with-fig5 --n-jobs 8
+
+
+# ---------- Adult+DDPM LOO-MIA 端到端后处理（与 CTGAN 同逻辑，train_rows 仅 200/500/1000/1500，5 seeds，图注明 DDPM, Adult） ----------
+# 要求 run 名称含 adult + control + ddpm（或 tabddpm），shadow_pair_metrics 完整。图保存到 outputs/postprocess_adult_ddpm/figures/，标题带 "DDPM, Adult"
+python scripts/adult_ddpm_loomia_postprocess.py --outputs outputs --outdir outputs/postprocess_adult_ddpm
+# 含 Fig5 learned attacker、多进程：
+# python scripts/adult_ddpm_loomia_postprocess.py --outputs outputs --outdir outputs/postprocess_adult_ddpm --with-fig5 --n-jobs 8
+
+
+# ---------- 统计分析（锁定数据 + 显著性检验 + 偏相关 + 稳健回归 + learned 检验） ----------
+# 依赖：先跑完上面后处理，得到 adult_ctgan_run_summary.csv
+# 产出：scaling/rounds/iter_balanced.csv、dropped_runs.csv、table1–3 检验表、table4 偏相关、table5 稳健回归、table6–7 learned 检验、fig7–fig10
+python scripts/adult_ctgan_statistical_analysis.py --summary outputs/postprocess_adult_ctgan/adult_ctgan_run_summary.csv --outdir outputs/postprocess_adult_ctgan/stats
+# 若已有带 learned_adv 的 scaling 表（如后处理加了 --with-fig5 并手动合并过），可传入做 learned 检验：
+# python scripts/adult_ctgan_statistical_analysis.py ... --scaling-with-learned outputs/postprocess_adult_ctgan/scaling_with_learned.csv
+
+
+# ---------- Outlier 子集上的 single-release MIA（attack-agnostic） ----------
+# 定义：density（kNN 距离）、rare（稀有类别），不用 AUC/delta/control 挑子集。
+# 子集：top p% (p=5,10,20,50,100)。评估：target 级 -median(min_dist_in) 的 subgroup AUC。
+# 输出：outlier_auc_curves.csv, outlier_auc_summary_byN.csv, outlier_score_stats.csv,
+#       fig_outlier_auc_vs_subsetsize_*.png, fig_outlier_auc_vs_N_fixedp.png,
+#       fig_outlier_score_distribution_byN.png, fig_outlier_score_membership_auc.png,
+#       outlier_score_membership_leak_check.csv, outlier_stability_across_seeds.csv
+# python scripts/outlier_subgroup_mia.py --outputs outputs --outdir outputs/outlier_mia
+
+# ---------- 仅用影子模型原始数据做 MIA（无 pair_metrics）：4 种方法 ----------
+# 输入：单个 run 目录（含 shadow/target_*/synthetic_round_*_in/out.csv 与 _control_in/control_out.csv）。
+# 2(Naive/Delta) × 2(k-NN/Density)：Naive=不用 control 参与算分，Delta=减去 control 基线得差分信号；
+# k-NN 取 k=1,8,32（最近 k 条距离的平均），Density=DOMIAS 式 k-NN 密度 log(d_in)-log(d_out)。
+# 输出：auc_naive_knn_k1/k8/k32, auc_naive_density, auc_delta_knn_k1/k8/k32, auc_delta_density。
+# python scripts/shadow_mia_from_raw.py --run-dir outputs/train_adult_..._control_seed42_20260221_030832 --n-jobs 32
+# python scripts/shadow_mia_from_raw.py --run-dir outputs/<run_dir> --output outputs/mia_from_raw_result.csv --n-jobs 32
+
+# 32 进程 + nohup 后台运行（日志到 shadow_mia.log，可改 run-dir / output）
+nohup python scripts/shadow_mia_from_raw.py \
+  --run-dir "outputs/train_adult_openml_preprocess_monotonic_train1000_synth1000_ctgan_1000iter_bs256_rounds20_candidate100_control_seed42_20260220_234247" \
+  --output scripts/demo_auc_results/delta_avg_mia_result.csv \
+  --n-jobs 32 \
+  > shadow_mia.log 2>&1 &
+# 查看进度: tail -f shadow_mia.log
+
+# ---------- Delta_avg 实验：δ_avg = M_in - (M_out + M_c1 + M_c2)/3 ----------
+# 与原有 δ = (M_in - M_out) - (M_c1 - M_c2) 并列，输出 auc_delta_avg_knn_k1/k8/k32, auc_delta_avg_density
+python scripts/shadow_mia_from_raw.py --run-dir "outputs/train_adult_openml_preprocess_monotonic_train1000_synth1000_ctgan_1000iter_bs256_rounds20_candidate100_control_seed42_20260220_234247" --output scripts/demo_auc_results/delta_avg_mia_result.csv --n-jobs 32
+
+# ---------- ctgan rounds=20，iter ∈ {200,500,1000,1500,2000}，5 组 seed，跑 MIA 后按 iter 求均值 ----------
+# 自动扫描 outputs/ 下含 ctgan、rounds20、control、对应 iter 与 seed 的 run，逐个跑 shadow_mia_from_raw，再按 n_iter 对 AUC 求平均
+python scripts/run_mia_by_iter_seeds.py \
+  --iters 200 500 1000 1500 2000 \
+  --rounds 20 \
+  --n-seeds 5 \
+  --model ctgan \
+  --dataset adult_openml \
+  --n-jobs 32
+# 指定 5 个 seed：--seed-list 42 43 44 45 46
+# 仅汇总已有 CSV（不重跑 MIA）：--skip-run
+# 32 进程 + nohup 后台：
+nohup python scripts/run_mia_by_iter_seeds.py \
+  --iters 200 500 1000 1500 2000 \
+  --rounds 20 \
+  --n-seeds 5 \
+  --model ctgan \
+  --dataset adult_openml \
+  --n-jobs 32 \
+  > mia_by_iter.log 2>&1 &
+# 结果目录默认: scripts/demo_auc_results/mia_by_iter_ctgan_rounds20/
+# 产出: iter{N}_seed{S}.csv 每 run 一份, all_runs.csv 明细, summary_mean_by_iter.csv 按 iter 的 AUC 均值±std
+
+# ========== 实验流程与当前工作（第一人称简述） ==========
+#
+# 一、整体实验流程
+#
+# 我做的是「表格合成数据 + 成员推断（MIA）」的一条龙实验，大致分四步：
+#
+# 1) 主训练与 Shadow 数据生成
+# 我跑 synthgen.train 时打开 shadow_model=true、control_branch=true，用 leave-one-out 语义为每个 target 生成 in/out 合成数据：训练集 in = base_aux ∪ {target}，out = base_aux ∪ {某条 non-member}，两者只差一条记录；同时为对照分析生成 control_in/control_out。每个 run 会得到 outputs/<run_dir>/，其中 shadow/ 下按 target 存 synthetic_round_k_in/out.csv 与可选的 control_in/out。run 目录名里会带 train_size、iter、batchsize 等，且含 "control" 的才是带对照的 run。
+#
+# 2) 单 run 的 pair 指标与 delta 分析
+# 对每个已跑完的 run_dir，我跑 run_shadow_metrics_pipeline.py（内部先 shadow_pair_metrics.py 再 shadow_delta_analysis.py）。这样在 run_dir/shadow_pair_metrics/ 下会得到：pair_metrics.csv（每个 target×round 的 in/out 对指标，含 MMD、delta_min_dist 等）、pair_metrics_control.csv（control 对的同样指标）、summary_by_target*.csv、以及 global_delta_stats.json、control_comparison.json、mmd_component_analysis.json 等。这些是后续做攻击效果和稳定性分析的数据来源。
+#
+# 3) 多 run 汇总与已有图表
+# 我已有脚本扫描 outputs 下名称含 control 的 run，把 global_delta_stats、control_comparison 等展平进汇总表（如 control_shadow_metrics_summary_auto.csv），并画 Cohen's d、delta 分布、replicate 稳定性等图（make_shadow_figures.py）。这些是「按 run 聚合」的视角，还没有显式做「区分 member vs non-member」的 AUC 和与 MMD 稳定性桥接的图。
+#
+# 4) 当前在做的事：AUC、Stability 与两张新图
+# 我在上述流程之上加了一步：只针对「完整」的 control run（即 shadow_pair_metrics/ 里同时有 pair_metrics.csv、control_comparison.json、mmd_component_analysis.json 的目录），做两件事。
+#
+# 第一件事是严格按「每个 pair 一行」算攻击效果：用 pair_metrics.csv 里的行当作 member（label=1），用 pair_metrics_control.csv 里的行当作 non-member（label=0），以 delta 列为 score（优先 delta_min_dist_mean，否则自动选 delta 列），在 per-pair 行级上算 ROC-AUC，得到 auc_in_out，再得到 adv_auc = AUC − 0.5（attack advantage），并对 pair 行做 bootstrap 得到 adv_auc 的 95% 置信区间。这样 AUC 完全基于样本级 pair 数据，不用 summary 均值，也不拿 Cohen's d 替代。
+#
+# 第二件事是从 mmd_component_analysis.json 里自动抽一个稳定性标量（优先 total/overall 类键，否则对全部数值取 mean），记作 stability_metric，并记下字段来源名 stability_metric_name，用作后续和 adv_auc 的桥接指标（可理解为 MMD 越大越不稳定/shift 越大）。
+#
+# 输出上，我生成一张新汇总表 outputs/control_shadow_metrics_summary_with_auc_stability.csv（包含原有 summary 的列再加上 auc_in_out、adv_auc、adv_auc_ci95_*、stability_metric、stability_metric_name），并画两张图：图 A 是 Adv(AUC) vs Train Size（按 iter 区分，同配置 jitter+均值点、y=0 参考线、有 bootstrap CI 或用 replicate std 做 error bar），图 B 是 Adv(AUC) vs Stability（按 train_size 颜色、iter 做 marker，带线性拟合与 Pearson r、p、R²，标题标明 higher stability_metric 表示更不稳定/更多 shift）。运行方式是无 GUI 的 Agg backend，跑完后在终端打印表路径、两张图路径、成功算 AUC 的 run 数、缺失 label/文件的 run 列表，以及每个 train_size 的 adv_auc 平均值摘要。
+#
+# 入口命令就是上面那行：
+#   python scripts/make_auc_stability_figs.py --outputs outputs --outdir outputs/figures
+#
+# 整体上，我先把 Shadow 的 in/out 与 control 数据跑出来，再在单 run 上算 pair 级指标和 delta/MMD 分析，最后在多 run 层面做 AUC、stability 汇总和这两张新图，把攻击优势（adv_auc）与训练规模、与 MMD 稳定性串起来看。

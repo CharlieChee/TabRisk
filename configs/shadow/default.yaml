@@ -1,0 +1,39 @@
+# Shadow Modelling 配置（仅在 shadow_model=true 时生效）
+# 用于 dataset-level targeted MIA，leave-one-out 语义
+
+num_shadow_rounds: 1
+target_selection_strategy: random_k   # random_k | all
+max_targets: 10                       # random_k 策略下随机选取的 target 数量
+target_mix: true                      # true：target 从 train 与 non-member 各约一半选取（用于平衡 MIA）；false：仅从 train 选取
+shadow_train_rows: null               # null 表示使用主流程的 train_rows
+shadow_synthetic_rows: null           # null 表示使用主流程的 synthetic_rows
+random_seed: null                     # null 表示使用主流程的 seed
+
+# 并行：多进程执行，每进程绑定一个 GPU（需多卡时请勿在命令行限制 CUDA_VISIBLE_DEVICES，或设为 0,1,...,7）
+num_workers: 64                       # 并行任务数（8 卡 × 每卡 8 任务），约减半 CPU 负载
+gpu_ids: [0, 1, 2, 3, 4, 5, 6, 7]     # 使用的 GPU 物理编号，任务按 job_index % len(gpu_ids) 轮询分配
+
+# 是否生成 LOO 对照对（control_in/control_out），用于 delta 对照分析
+control_branch: false
+
+# Shadow 引擎实现方式：
+# - legacy: 使用现有的基于 ProcessPoolExecutor 的实现（完全保持原有语义与行为）
+# - worker: 使用每 GPU 一个或多个长寿命 worker 进程，复用内存与状态以提升性能（需要多卡环境）
+engine: legacy
+
+# 复用模式开关：
+# - false（默认）：不启用复用，完全保持原有逻辑与行为；
+# - true：启用复用模式，在内部对训练数据集进行全局去重，复用模型以减少训练开销。
+reuse_mode: false
+
+# 复用模式下的控制参数，仅在 reuse_mode=true 时生效：
+# - reuse_num_bases：全局生成的 base_aux（伴随样本集合）的种类数，数值越小，复用越多、训练模型越少；
+# - reuse_num_out_candidates：从 non-member 中选作 out 替换样本的候选个数，数值越小，out 训练集越容易重复；
+# - reuse_num_control_candidates：control_branch=true 时，r1/r2 仅从此数量的候选池中抽取，控制唯一 dataset 约 2 倍于无 control。
+reuse_num_bases: 10
+reuse_num_out_candidates: 10
+reuse_num_control_candidates: 10
+
+# 当 engine=worker 时，每张 GPU 上最多同时运行的 worker 进程数。
+# 建议在 A800 这类卡上尝试 2~4，以提升 GPU 利用率；过大可能导致 CPU/I/O 争抢。
+worker_concurrency_per_gpu: 1

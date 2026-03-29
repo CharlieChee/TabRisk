@@ -299,6 +299,13 @@ class SynthCityPATEGANModel(_SynthCityModelBase):
             **kwargs,
         )
 
+    def _plugin_params(self) -> Dict[str, Any]:
+        """PATEGAN 训练循环可能以 generator_n_iter / discriminator_n_iter 为准，显式同步 n_iter。"""
+        params = super()._plugin_params()
+        params["generator_n_iter"] = self.n_iter
+        params["discriminator_n_iter"] = self.n_iter
+        return params
+
 
 class SynthCityTabDDPMModel(_SynthCityModelBase):
     """基于 SynthCity 的 TabDDPM 生成模型（扩散模型）。"""

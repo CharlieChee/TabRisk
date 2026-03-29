@@ -142,8 +142,16 @@ def create_plugin(
 
     params: Dict[str, Any] = {"random_state": random_state, **kwargs}
     plugins = Plugins()
-    # 使用实际插件名过滤参数（SynthCity 内注册名为 ddpm）
+
+    # --- 调试辅助：打印 PATEGAN 传入 SynthCity 前后的参数，用于排查 n_iter 等是否被过滤 ---
+    if plugin_name == "pategan":
+        logger.info("[PATEGAN debug] raw params before filter: %s", params)
+
+    # 使用实际插件名过滤参数（SynthCity 内注册名为 ddpm / pategan / 等）
     params = filter_plugin_params(plugin_name, params, plugins)
+
+    if plugin_name == "pategan":
+        logger.info("[PATEGAN debug] params after filter_plugin_params: %s", params)
 
     # 显式移除 gpu_id / cuda_visible_devices，禁止透传到 SynthCity 插件；device 仍然保留
     params = dict(params)
